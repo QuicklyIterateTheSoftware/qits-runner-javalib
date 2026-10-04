@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-runner</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- The daemon scaffolding every pull-based runner embeds: register-once, the bearer, the
+         control socket, slot accounting, self-update, decommission, health, GC scheduling and
+         per-runner namespacing on a shared node, plus the install-script template a server renders.
+         Depends on qits-runner-protocol (the wire it speaks), io.vertx:vertx-core (the control
+         socket and the register/bearer HTTP calls), org.jboss.logging:jboss-logging (CI's log
+         lines must stay byte-identical once qits-772 moves it onto this jar) and
+         eu.wohlben.qits:qits-containers-driver (the docker layer this module namespaces per
+         runner, never host-wide).
+
+         NO JACKSON DATABIND, NO QUARKUS, NO CDI — enforced below, not just written here: the
+         embedders are not all Quarkus applications (the workspaces runner is a static musl
+         binary), and a bean annotation would either do nothing or drag a container into every one
+         of them. Configuration arrives through constructors; wire shapes are read through
+         io.vertx.core.json, never through reflection. -->
+    <artifactId>qits-runner-toolkit</artifactId>
+    <name>qits-runner :: runner-toolkit</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-runner-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jboss.logging</groupId>
+            <artifactId>jboss-logging</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-containers-driver</artifactId>
+            <version>${qits.containers-driver.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <!-- A forbidden dependency fails `verify`, not a reviewer: Jackson databind would
+                     reflect over this module's wire types, and Quarkus/CDI would make an embedder
+                     that is not a Quarkus application (the workspaces runner's static binary)
+                     either drag in a container for nothing or fail to boot at all. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>no-jackson-databind-or-cdi</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <searchTransitive>true</searchTransitive>
+                                    <excludes>
+                                        <exclude>com.fasterxml.jackson.core:jackson-databind</exclude>
+                                        <exclude>io.quarkus:*</exclude>
+                                        <exclude>jakarta.enterprise:*</exclude>
+                                        <exclude>jakarta.inject:*</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                            <fail>true</fail>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

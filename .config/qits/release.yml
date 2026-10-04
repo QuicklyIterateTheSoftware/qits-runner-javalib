@@ -1,0 +1,4 @@
+archetype: maven-library
+artifacts:
+  - { type: maven, name: "eu.wohlben.qits:qits-runner-protocol", path: runner-protocol, sbom: runner-protocol/target/sbom.json }
+  - { type: maven, name: "eu.wohlben.qits:qits-runner-toolkit", path: runner-toolkit, sbom: runner-toolkit/target/sbom.json, link: [qits-runner-protocol] }

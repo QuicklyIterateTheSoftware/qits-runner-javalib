@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-runner</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- The runner control-socket wire contract: the lifecycle frames every pull-based runner
+         speaks (hello/ack/heartbeat/backlog/reserve/nothing/upgrade/retire/quarantined/reinstated)
+         plus RunnerCodec, which delegates every other frame to the runner's own DomainCodec. Plain
+         records, plain constructors, no annotations, NO DEPENDENCY, ever — a runner's protocol jar
+         is the one thing every peer of every kind links, so it must never drag in Quarkus, Vert.x
+         or a JSON library.
+
+         Moved from qits-ci-runner-daemon's ci-runner-protocol at 2026.1003.50846 (qits-857), and
+         generalised: the lifecycle arms of CiRunnerCodec, its reader helpers (WireMaps) and
+         CiRunnerBinary.readVersion, renamed. The CI-specific fields (Capabilities.idRange,
+         Ack.registryMirrors, heldRuns/adoptedRuns) move to the domain side via RunnerVocabulary and
+         DomainCodec.helloExtensions/capabilities. -->
+    <artifactId>qits-runner-protocol</artifactId>
+    <name>qits-runner :: runner-protocol</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <!-- This jar has NO compile/runtime dependency, and never grows one: a lifecycle
+                     frame is encoded and decoded over plain Map<String,Object>, so nothing beyond
+                     the JDK is ever needed to speak the wire contract. Test scope stays open for
+                     JUnit. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>no-compile-or-runtime-dependency</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>*:*:*:*:compile</exclude>
+                                        <exclude>*:*:*:*:runtime</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                            <fail>true</fail>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

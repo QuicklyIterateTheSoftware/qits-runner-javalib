@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- qits-runner-javalib: the shared scaffolding every pull-based runner embeds. Two published
+         jars — eu.wohlben.qits:qits-runner-protocol (the lifecycle frames and a codec that
+         delegates every other frame to the runner's own) and eu.wohlben.qits:qits-runner-toolkit
+         (register, bearer, control socket, slots, self-update, decommission, health, GC, install
+         script) — plus runner-harness, an unpublished harness runner and its suite that proves the
+         toolkit against a fake host. Extracted from qits-ci-runner-daemon 2026.1003.50846; that
+         repository keeps its own private copy until qits-772 moves it onto this one.
+
+         THE REGISTRIES-JAVALIB SHAPE: this pom is the parent only, never a module, and the version
+         is duplicated literally in every child's <parent> block rather than derived — the release
+         flow rewrites every one of them to the tag it cuts. 1.0.0-SNAPSHOT until the first release,
+         exactly as qits-ci-runner-daemon's and qits-containers-javalib's were before theirs.
+
+         A CLONE OF THIS REPO ALONE BUILDS: `./mvnw verify`, no docker, no network, no credentials.
+         quarkus-bom is imported in dependencyManagement ONLY, to align managed versions (junit,
+         vertx, jboss-logging) with the platform's own; nothing from Quarkus itself is on the
+         classpath of either published jar (AGENTS.md). -->
+    <groupId>eu.wohlben.qits</groupId>
+    <artifactId>qits-runner</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>qits-runner</name>
+
+    <modules>
+        <module>runner-protocol</module>
+        <module>runner-toolkit</module>
+        <module>runner-harness</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.release>25</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+        <quarkus.platform.version>3.34.6</quarkus.platform.version>
+
+        <!-- qits-containers-driver (qits-623), pinned to a released calver and moved only by the
+             maintenance dependencies bump — never by hand. -->
+        <qits.containers-driver.version>2026.1004.204507</qits.containers-driver.version>
+
+        <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain
+             developer build resolves off this public default. -->
+        <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
+
+        <compiler-plugin.version>3.15.0</compiler-plugin.version>
+        <surefire-plugin.version>3.5.4</surefire-plugin.version>
+        <enforcer-plugin.version>3.5.0</enforcer-plugin.version>
+    </properties>
+
+    <repositories>
+        <!-- The platform's own Maven repository: qits-runner-toolkit's qits-containers-driver
+             dependency, and runner-protocol's test-only qits-ci-runner-protocol fixture, both come
+             from here. The id must stay `qits-maven`: it is what the bootstrap's settings mirror
+             matches by exact id, and what a cached copy is recorded under. -->
+        <repository>
+            <id>qits-maven</id>
+            <url>${qits.maven.repository.url}</url>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>${quarkus.platform.artifact-id}</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${compiler-plugin.version}</version>
+                    <configuration>
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>${enforcer-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

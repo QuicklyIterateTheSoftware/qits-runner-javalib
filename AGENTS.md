@@ -42,7 +42,13 @@ driver builds is a pure function, asserted element by element. `--rm` appears no
 ## Testing
 
 Plain JUnit 5. **No Mockito, no `@QuarkusTest`.** Real sockets and a script standing in for docker
-are preferred over seams, the way qits-ci-runner-daemon's `FakeDocker`/`FakeHost` are.
+are preferred over seams: `FakeRunnerHost` and `FakeDocker`, which ship in the toolkit's main jar
+under `eu.wohlben.qits.runner.toolkit.testing` so an embedder's suite uses the same ones.
+
+**The harness suite stays outside the toolkit's package.** `HarnessRunnerTest` may use only the
+toolkit's public API and its `testing` package, because that is all qits-624's suite gets. A case
+it cannot express that way is a gap in the API, fixed there (public and documented, as
+`RunnerRuntime.NodeOptions` was), never reached through a package-private seam.
 
 Test names are sentences describing the behaviour
 (`aDeletedRetireAddsItsKindAndAnUnknownKindReadsAsSuperseded`).
@@ -53,10 +59,12 @@ Test names are sentences describing the behaviour
 2. `RunnerWire.Type`/`Field` constants — never a bare string at a call site.
 3. Encode and decode arms in `RunnerCodec`, and the round-trip list in the codec test (the
    "every permitted subclass is covered" test fails until all of them exist).
-4. `Upgrade` and `Retire` are **frozen** for every installed runner of every kind: a new field is
+4. A frame CI also speaks keeps CI's byte-identical spelling and key order:
+   `CiWireCompatibilityTest` compares against `qits-ci-runner-protocol:2026.1003.50846`.
+5. `Upgrade` and `Retire` are **frozen** for every installed runner of every kind: a new field is
    additive and never a capability bump. A capability bump is each runner's own
    `capabilityVersion`, never a base constant.
-5. **Release this repository, then bump the dependency in each embedder** and handle the new case
+6. **Release this repository, then bump the dependency in each embedder** and handle the new case
    there. This repo is the protocol's only author; the published jar is what enforces it.
 
 ## Untrusted input
@@ -72,8 +80,14 @@ server, exactly as qits-ci-runner-daemon's `WorkloadSpec` is:
   `qits-containers*` or `qits-buildkitd*` — a shared node (qits-772's CI runner beside a workspaces
   runner) makes that collision a live hazard, not a theoretical one.
 - **Secrets stay put.** The registration token is read once and never logged; state carrying a
-  bearer is created 0600; a registry login for a self-update pull is a throwaway `docker --config`
-  deleted in a `finally`.
+  bearer is created 0600; a registry login — for a self-update pull and for a domain's workload
+  pull through `RunnerSession.registry()` alike — is a throwaway `docker --config` deleted in a
+  `finally`.
+
+**qits-772 depends on `CiWireCompatibilityTest` and
+`RunnerIdentityTest.theCiShapedIdentityDerivesTodaysCiSpellingsExactly`.** Never weaken or delete
+either to make a change pass: they are what keeps installed CI runners readable once qits-772 moves
+qits-ci-runner-daemon onto this library.
 
 ## Formatting
 

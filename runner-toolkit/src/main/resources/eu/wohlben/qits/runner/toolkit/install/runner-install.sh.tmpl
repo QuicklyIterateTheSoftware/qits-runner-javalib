@@ -1,0 +1,135 @@
+#!/bin/sh
+# Installs (or replaces) {{NAME_PREFIX}} on this host: ONE docker container, supervised by docker's
+# own restart policy. For any Linux host with docker, run by root or by a user who may use docker.
+#
+# THIS SCRIPT IS RENDERED BY THE SERVER THE RUNNER REGISTERS WITH, from qits-runner-toolkit's
+# template (eu/wohlben/qits/runner/toolkit/install/runner-install.sh.tmpl, filled by
+# InstallScript.script). Every name in it is derived from the runner's RunnerIdentity, the same
+# value the runner derives its own names from, and only the image is a value the server pins. Its
+# `docker run` is the container contract a runner also rolls itself over into
+# (LifecycleArgv.runSuccessor): the toolkit's InstallScriptContractTest runs this script against a
+# stub docker and holds the two to one argv, element for element, so change them together.
+#
+# Not run by hand: {{PAGE}} hands out ONE LINE that downloads this script and pipes it into `sudo env
+# {{ENV_PREFIX}}URL=... {{ENV_PREFIX}}ID=... {{ENV_PREFIX}}REGISTRATION_TOKEN=... {{ENV_PREFIX}}SLOTS=... sh`.
+# So this script carries no secret and names no runner: the four values come from its environment,
+# and it runs in a shell of its own, so a refusal ends that shell and never the one it was pasted
+# into. Everything below is inside main(), called on the last line, so a download cut short runs
+# nothing at all.
+#
+# WHAT IT DOES:
+#
+#   1. refuses, one sentence each, when a value is missing or carries a character this script will
+#      not hand to docker, or when docker does not answer;
+#   2. logs in to the platform's registry with the registration token, in a throwaway docker config
+#      that is deleted right after, and pulls the runner image — the host's own docker config is
+#      never written;
+#   3. removes every container of this runner (label {{LABEL_ROOT}}.process=<id>) — a re-run
+#      REPLACES the runner, and a re-run with a new token is how a registration is rotated;
+#   4. keeps the runner's state volume but removes client.json from it, so the token it was just
+#      given is the one the runner registers with;
+#   5. starts the runner container, and prints how to watch it.
+#
+# The registration token appears in no line this script prints and in no command line: the login
+# reads it on stdin, and the container gets it as `-e {{ENV_PREFIX}}REGISTRATION_TOKEN`, docker's
+# own "take the value from my environment" form.
+set -eu
+
+refuse() {
+  echo "{{NAME_PREFIX}} install: $*" >&2
+  exit 1
+}
+
+# One sentence per missing value, naming it, and a charset that keeps every value one plain word: they
+# become container names, labels and environment values.
+require() { # $1 = name, $2 = value
+  [ -n "$2" ] || refuse "$1 is not set; paste the whole line from {{PAGE}}."
+  case "$2" in
+    *[!A-Za-z0-9._~+/=:-]*) refuse "$1 carries a character this script will not hand to docker." ;;
+  esac
+}
+
+main() {
+  require {{ENV_PREFIX}}URL "${{{ENV_PREFIX}}URL:-}"
+  require {{ENV_PREFIX}}ID "${{{ENV_PREFIX}}ID:-}"
+  require {{ENV_PREFIX}}REGISTRATION_TOKEN "${{{ENV_PREFIX}}REGISTRATION_TOKEN:-}"
+  require {{ENV_PREFIX}}SLOTS "${{{ENV_PREFIX}}SLOTS:-}"
+
+  # RENDERED: the image the server pins (the runner's image repository on its registry's public
+  # host) and its version, which is also the container name's suffix and the version label.
+  image='{{IMAGE}}'
+  version="${image##*:}"
+
+  registry="${image%%/*}"
+  id8=$(printf '%s' "${{ENV_PREFIX}}ID" | cut -c1-8)
+  name="{{NAME_PREFIX}}-$id8-$version"
+  volume="{{NAME_PREFIX}}-state-$id8"
+
+  command -v docker >/dev/null 2>&1 || refuse "docker is not on PATH; install docker first."
+  docker version >/dev/null 2>&1 \
+    || refuse "docker does not answer (docker version failed); start it, or run this as root or as a user in the docker group."
+
+  # The registry answers an anonymous pull with 401, and the host's docker config is nobody's to
+  # write: a login there would outlive this script and serve every docker user on the host. So the
+  # login lives in a directory of its own (mktemp -d is 0700) and is gone before anything else runs.
+  config=$(mktemp -d)
+  if ! printf '%s' "${{ENV_PREFIX}}REGISTRATION_TOKEN" \
+      | docker --config "$config" login "$registry" -u token --password-stdin >/dev/null 2>&1; then
+    rm -rf "$config"
+    refuse "the registry $registry refused the registration token; paste a fresh line from {{PAGE}}."
+  fi
+  if ! docker --config "$config" pull "$image" >/dev/null; then
+    rm -rf "$config"
+    refuse "could not pull $image."
+  fi
+  rm -rf "$config"
+
+  # Whatever runs as this runner now goes: an earlier install, a runner that rolled itself over, an
+  # exited predecessor. The workload containers carry a different label and are the new runner's
+  # boot sweep's to remove.
+  for container in $(docker ps -aq --filter "label={{LABEL_ROOT}}.process=${{ENV_PREFIX}}ID"); do
+    docker rm -f "$container" >/dev/null
+  done
+
+  # The volume is KEPT — it is the runner's state — but its client goes: the runner registers with
+  # the token in this line, which on a re-run is a new one.
+  docker run --rm --entrypoint rm -v "$volume:{{STATE_DIR}}" "$image" \
+    -f {{STATE_DIR}}/client.json
+
+  # `-e NAME` hands docker the value from its own environment, so the token is in no command line.
+  export {{ENV_PREFIX}}REGISTRATION_TOKEN
+
+  # THE CONTAINER CONTRACT. docker's restart policy is the supervisor; the socket is how the runner
+  # starts its workloads and, when told to update, its own successor; the volume holds its client.
+  # No --network: docker's default bridge. The runner's own label is {{LABEL_ROOT}}.process — never
+  # {{LABEL_ROOT}}, which the runner's boot sweep removes. The three values go in the order
+  # LifecycleArgv.runSuccessor writes a successor's environment (sorted by name), the token last, so
+  # the two compare element for element.
+  set -- \
+    -d \
+    --name "$name" \
+    --restart unless-stopped \
+    --label "{{LABEL_ROOT}}.process=${{ENV_PREFIX}}ID" \
+    --label "{{LABEL_ROOT}}.version=$version" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$volume:{{STATE_DIR}}" \
+    -e "{{ENV_PREFIX}}ID=${{ENV_PREFIX}}ID" \
+    -e "{{ENV_PREFIX}}SLOTS=${{ENV_PREFIX}}SLOTS" \
+    -e "{{ENV_PREFIX}}URL=${{ENV_PREFIX}}URL" \
+    -e {{ENV_PREFIX}}REGISTRATION_TOKEN
+  # The operator's tuning, when the line (or the shell) set any. Everything else has its default.
+  for tuning in {{TUNING}}; do
+    value=$(printenv "$tuning" || true)
+    if [ -n "$value" ]; then
+      case "$value" in
+        *[!A-Za-z0-9._~+/=:,-]*) refuse "$tuning carries a character this script will not hand to docker." ;;
+      esac
+      set -- "$@" -e "$tuning=$value"
+    fi
+  done
+  docker run "$@" "$image" >/dev/null
+
+  echo "{{NAME_PREFIX}} started; watch: docker logs -f $name"
+}
+
+main "$@"

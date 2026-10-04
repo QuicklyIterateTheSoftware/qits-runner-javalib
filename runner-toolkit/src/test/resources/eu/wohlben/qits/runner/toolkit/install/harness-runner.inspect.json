@@ -1,0 +1,33 @@
+[
+  {
+    "Id": "4f6c1e0b2a9d0000000000000000000000000000000000000000000000000000",
+    "Name": "/qits-harness-runner-3f2a9c1e-0.0.0-fixture",
+    "Image": "sha256:fixture",
+    "Config": {
+      "Image": "registry.qits.example.org/qits/qits-harness-runner:0.0.0-fixture",
+      "Env": [
+        "QITS_HARNESS_RUNNER_URL=https://harness.qits.example.org",
+        "QITS_HARNESS_RUNNER_ID=3f2a9c1e-0000-4000-8000-000000000001",
+        "QITS_HARNESS_RUNNER_SLOTS=2",
+        "QITS_HARNESS_RUNNER_REGISTRATION_TOKEN=qits_tok_SPENT",
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Labels": {
+        "org.opencontainers.image.version": "0.0.0-fixture",
+        "qits.harness.runner.process": "3f2a9c1e-0000-4000-8000-000000000001",
+        "qits.harness.runner.version": "0.0.0-fixture"
+      }
+    },
+    "HostConfig": {
+      "Binds": [
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "qits-harness-runner-state-3f2a9c1e:/var/lib/qits-harness-runner"
+      ],
+      "NetworkMode": "bridge",
+      "RestartPolicy": {
+        "Name": "unless-stopped",
+        "MaximumRetryCount": 0
+      }
+    }
+  }
+]

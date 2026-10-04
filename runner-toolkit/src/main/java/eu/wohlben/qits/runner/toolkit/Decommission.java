@@ -5,7 +5,9 @@ import io.vertx.core.json.JsonObject;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Supplier;
 import org.jboss.logging.Logger;
@@ -27,7 +29,7 @@ import org.jboss.logging.Logger;
  *   the helper ({@link DecommissionHelper#finish}):
  *     every container labelled &lt;labelRoot&gt;.process=&lt;id&gt; → wait for it to exit, docker rm -f
  *     every container labelled &lt;labelRoot&gt;=&lt;id&gt;         → docker rm -f (the workloads)
- *     every volume labelled &lt;labelRoot&gt;=&lt;id&gt;            → docker volume rm
+ *     every volume labelled &lt;labelRoot&gt;=&lt;id&gt;            → docker volume rm, if named &lt;namePrefix&gt;-…
  *     each teardown item, refused unless it starts with &lt;namePrefix&gt;-
  *     docker volume rm &lt;namePrefix&gt;-state-&lt;id8&gt;
  *     docker rm -f itself
@@ -132,12 +134,26 @@ public final class Decommission {
       LOG.warnf("%s's domain could not name its teardown items: %s", who, e.getMessage());
       items = List.of();
     }
+    // The first of two belts: an item not under this runner's prefix never reaches the helper's
+    // environment, so a neighbour's name appears in no argv of this runner at all. The helper
+    // checks again, for an environment it did not receive from here.
+    List<TeardownItem> owned = new ArrayList<>();
+    for (TeardownItem item : items) {
+      if (identity.ownsName(item.name())) {
+        owned.add(item);
+      } else {
+        LOG.warnf(
+            "%s refused its domain's teardown %s %s: it does not start with %s-, so it is not"
+                + " this runner's to remove",
+            who, item.type().name().toLowerCase(Locale.ROOT), item.name(), identity.namePrefix());
+      }
+    }
     RunnerDocker.Result started;
     try {
       started =
           docker.run(
               LifecycleArgv.runDecommissioner(
-                  identity, docker.binary(), runnerId, image, volume, items));
+                  identity, docker.binary(), runnerId, image, volume, owned));
     } catch (IllegalArgumentException refused) {
       LOG.warnf("%s cannot start its decommission helper: %s", who, refused.getMessage());
       return;

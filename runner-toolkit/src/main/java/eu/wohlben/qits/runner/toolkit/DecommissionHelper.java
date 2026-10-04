@@ -15,9 +15,10 @@ import java.util.function.Consumer;
  *
  * <p><b>It reaches only what is this runner's</b>: containers and volumes by the exact label
  * filters {@code label=<labelRoot>.process=<id>} and {@code label=<labelRoot>=<id>}, and names that
- * start with {@code <namePrefix>-}. A teardown item or a state volume of any other name is refused
- * and said, never removed — which is what makes another tenant's builder, network or volume
- * impossible to name here.
+ * start with {@code <namePrefix>-}. A volume is removed by name, so a labelled one must carry the
+ * label and the prefix both. A teardown item, a labelled volume or a state volume of any other name
+ * is refused and said, never removed — which is what makes another tenant's builder, network or
+ * volume impossible to name here.
  *
  * <p><b>The listings are made through the driver's own argv</b> ({@link DockerArgv#psByLabels},
  * {@link DockerArgv#volumeLs}) on the runner's process seam rather than through the driver's
@@ -79,13 +80,22 @@ public final class DecommissionHelper {
     }
     RunnerDocker.Result volumes = docker.run(DockerArgv.volumeLs(bin, owned));
     if (volumes.ok()) {
-      for (String name : volumes.stdout().split("\\s+")) {
-        if (!name.isBlank()) {
-          clean &=
-              removeVolume(
-                  docker, () -> DockerArgv.volumeRm(bin, name.strip()), name.strip(), "volume",
-                  settings, say);
+      for (String listed : volumes.stdout().split("\\s+")) {
+        String name = listed.strip();
+        if (name.isEmpty()) {
+          continue;
         }
+        // A volume is removed by name, and a name this runner does not own is not its to remove
+        // whatever label it carries: a label is anybody's to write. Refused, said, and the helper
+        // stays with its log — a labelled volume left behind is a question for a person.
+        clean &=
+            removeVolume(
+                docker,
+                () -> LifecycleArgv.volumeRm(identity, bin, name),
+                name,
+                "labelled volume",
+                settings,
+                say);
       }
     } else {
       say.accept("could not list runner " + runnerId + "'s volumes: " + volumes.detail());

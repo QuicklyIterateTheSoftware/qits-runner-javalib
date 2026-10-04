@@ -108,6 +108,7 @@ interface NodeLifecycle {
                 identity,
                 settings.runnerId(),
                 docker.driver(),
+                new OwnResources(identity, settings.runnerId(), docker),
                 docker.deadline(),
                 settings.stateDir(),
                 options.clock(),

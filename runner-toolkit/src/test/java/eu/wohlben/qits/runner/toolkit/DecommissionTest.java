@@ -141,6 +141,37 @@ class DecommissionTest {
         docker.calls()::toString);
   }
 
+  /**
+   * A label is anybody's to write; a name is what a removal is held to. A volume carrying this
+   * runner's ownership label under a name without its prefix is refused and said, and the helper
+   * stays with its log — the one exception to "remove by name only with the prefix" is a container
+   * id just listed by the runner's own label, never a volume.
+   */
+  @Test
+  void aLabelledVolumeWithoutThePrefixIsRefusedAndLeavesTheHelperStanding() throws Exception {
+    docker.volume("qits-toy-runner-dot-claude-r1", Map.of("qits.toy.runner", "r1"));
+    docker.volume("qits-buildkitd-state", Map.of("qits.toy.runner", "r1"));
+    docker.volume("someone-elses-data", Map.of("qits.toy.runner", "r1"));
+
+    assertEquals(1, finish(null), () -> String.join("\n", said));
+
+    assertEquals(Set.of("qits-buildkitd-state", "someone-elses-data"), docker.volumes().keySet());
+    assertEquals(
+        List.of(List.of("volume", "rm", "qits-toy-runner-dot-claude-r1")),
+        removals(),
+        "only the prefixed volume, and not the helper itself");
+    for (String foreign : List.of("qits-buildkitd-state", "someone-elses-data")) {
+      assertTrue(
+          said.stream()
+              .anyMatch(
+                  line ->
+                      line.startsWith("refused to remove the labelled volume " + foreign)
+                          && line.contains("does not start with qits-toy-runner-")),
+          () -> String.join("\n", said));
+    }
+    assertTrue(said.getLast().contains("incomplete; this helper stays"), said::toString);
+  }
+
   @Test
   void aTeardownItemWithoutThePrefixIsRefused() throws Exception {
     List<TeardownItem> offered =

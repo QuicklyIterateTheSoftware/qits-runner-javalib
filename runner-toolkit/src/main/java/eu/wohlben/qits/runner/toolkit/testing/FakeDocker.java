@@ -42,6 +42,9 @@ import java.util.stream.Stream;
  * <p>The state is what a suite with two runners on one node reads afterwards ({@link
  * #containers()}, {@link #volumes()}): what one runner removed, and what it left of the other's.
  *
+ * <p>Two runners on one node share one fake and tell their argv apart through a binary each
+ * ({@link #binaryFor}, {@link #callsBy}).
+ *
  * <p>A leading {@code --config <dir>} (a throwaway registry login) is recorded with what the
  * directory held at that moment ({@link #configs()}), then skipped for the answer.
  *
@@ -53,7 +56,10 @@ public final class FakeDocker {
       """
       #!/bin/sh
       dir=$(dirname "$0")
-      { for a in "$@"; do printf '%s\\037' "$a"; done; printf '\\036'; } >> "$dir/calls.log"
+      # One record, written with one printf, so two callers on one node never interleave fields.
+      record=$(for a in "$@"; do printf '%s\\037' "$a"; done; printf '\\036')
+      printf '%s' "$record" >> "$dir/calls.log"
+      [ -n "$FAKE_DOCKER_CALLER" ] && printf '%s' "$record" >> "$dir/calls-$FAKE_DOCKER_CALLER.log"
       if [ "$1" = "--config" ]; then
         { stat -c '%a' "$2" "$2/config.json" | tr '\\n' ' '; printf '\\037'; \\
           cat "$2/config.json"; printf '\\036'; } >> "$dir/configs.log"
@@ -219,6 +225,30 @@ public final class FakeDocker {
     return binary;
   }
 
+  /**
+   * A docker binary of {@code caller}'s own on this one node: a wrapper that runs {@link #binary()}
+   * with {@code FAKE_DOCKER_CALLER=<caller>} set, so every call through it is also recorded under
+   * that caller ({@link #callsBy}). Two runners sharing one fake each point their {@code
+   * <envPrefix>DOCKER_BINARY} at their own, and the suite can tell whose argv is whose while both
+   * see — and change — one node's state. Created once; asking again answers the same path.
+   *
+   * @param caller {@code [a-z0-9-]+}, the name the suite reads the calls back by
+   */
+  public String binaryFor(String caller) throws IOException {
+    if (caller == null || !caller.matches("[a-z0-9-]+")) {
+      throw new IllegalArgumentException("a caller is named [a-z0-9-]+, not '" + caller + "'");
+    }
+    Path wrapper = dir.resolve("docker-" + caller);
+    if (!Files.exists(wrapper)) {
+      Files.writeString(
+          wrapper,
+          "#!/bin/sh\nFAKE_DOCKER_CALLER=" + caller + " exec '" + binary + "' \"$@\"\n",
+          StandardCharsets.UTF_8);
+      Files.setPosixFilePermissions(wrapper, PosixFilePermissions.fromString("rwxr-xr-x"));
+    }
+    return wrapper.toString();
+  }
+
   public Path dir() {
     return dir;
   }
@@ -269,6 +299,16 @@ public final class FakeDocker {
   /** Every call, each as its argv WITHOUT the binary path — so assertions read like docker. */
   public List<List<String>> calls() {
     return records(dir.resolve("calls.log")).stream()
+        .map(fields -> List.of(Arrays.copyOf(fields, fields.length - 1)))
+        .toList();
+  }
+
+  /**
+   * Every call made through {@link #binaryFor caller}'s binary, as {@link #calls()} spells them —
+   * the argv one tenant of a shared node issued, and only that.
+   */
+  public List<List<String>> callsBy(String caller) {
+    return records(dir.resolve("calls-" + caller + ".log")).stream()
         .map(fields -> List.of(Arrays.copyOf(fields, fields.length - 1)))
         .toList();
   }

@@ -1044,6 +1044,35 @@ class RunnerRuntimeTest {
         helper::toString);
   }
 
+  /**
+   * The first belt: a teardown item without the runner's prefix never reaches the helper's
+   * environment, so a neighbour's name is in no argv of this runner at all.
+   */
+  @Test
+  void aTeardownItemWithoutThePrefixNeverReachesTheHelper() throws Exception {
+    containerWithStateVolume();
+    domain.teardown =
+        List.of(
+            new TeardownItem(TeardownItem.Type.CONTAINER, "qits-ci-runner-buildkitd"),
+            new TeardownItem(TeardownItem.Type.NETWORK, "qits-toy-runner-net-r1"));
+    ackWith(1, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    host.send(Retire.deleted("deleted by admin"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    List<String> helper = docker.calls("run").getFirst();
+    assertTrue(
+        helper.contains("QITS_TOY_RUNNER_DECOMMISSION_TEARDOWN=network:qits-toy-runner-net-r1"),
+        helper::toString);
+    assertTrue(
+        docker.calls().stream()
+            .flatMap(List::stream)
+            .noneMatch(a -> a.contains("qits-ci-runner-buildkitd")),
+        docker.calls()::toString);
+  }
+
   @Test
   void theFirstAckRemovesExitedAndLingeringPredecessorsAndNeverItself() throws Exception {
     selfUpdateSettings = new SelfUpdate.Settings(100, 400, 3_000, 400, 50);

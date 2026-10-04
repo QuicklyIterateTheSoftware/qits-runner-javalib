@@ -7,12 +7,14 @@ import java.time.Duration;
 import org.jboss.logging.Logger;
 
 /**
- * What a {@link HousekeepingPass} is handed: the runner's namespaced driver and its deadline, who
- * it is, where its state lives, a clock, and a log.
+ * What a {@link HousekeepingPass} is handed: the runner's namespaced driver, its own resources
+ * and its deadline, who it is, where its state lives, a clock, and a log.
  *
  * @param identity the runner's roots, which every name a pass may touch is derived from
  * @param runnerId this runner's id, the value of its ownership label
  * @param driver the qits-containers driver under {@code <labelRoot>.}
+ * @param own what on the node is this runner's, listed by {@code <labelRoot>=<runnerId>} — what a
+ *     pass reaches for rather than composing a filter of its own
  * @param deadline every docker call's, which the driver's methods take explicitly
  * @param stateDir the state volume's mount, which a successor inherits — where a pass keeps a
  *     record it needs across versions
@@ -23,6 +25,7 @@ public record HousekeepingContext(
     RunnerIdentity identity,
     String runnerId,
     ContainersDriver driver,
+    OwnResources own,
     Duration deadline,
     Path stateDir,
     Clock clock,

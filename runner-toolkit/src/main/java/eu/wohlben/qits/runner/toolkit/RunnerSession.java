@@ -38,6 +38,7 @@ public final class RunnerSession {
   private final RunnerSettings settings;
   private final RunnerDocker docker;
   private final RegistryLogin registry;
+  private final OwnResources own;
   private final Ops ops;
 
   RunnerSession(
@@ -50,6 +51,7 @@ public final class RunnerSession {
     this.settings = settings;
     this.docker = docker;
     this.registry = registry;
+    this.own = new OwnResources(identity, settings.runnerId(), docker);
     this.ops = ops;
   }
 
@@ -97,6 +99,15 @@ public final class RunnerSession {
    */
   public ContainersDriver driver() {
     return docker.driver();
+  }
+
+  /**
+   * What on the node is this runner's: the labels a workload must carry ({@link
+   * OwnResources#labels}, passed as the driver's {@code labels} argument), the listings by {@code
+   * <labelRoot>=<runnerId>}, and the session-start sweep ({@link OwnResources#reconcile}).
+   */
+  public OwnResources own() {
+    return own;
   }
 
   /**

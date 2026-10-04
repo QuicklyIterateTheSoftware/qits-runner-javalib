@@ -68,6 +68,7 @@ public record RunnerIdentity(
   private static final Pattern REGISTER_PATH = Pattern.compile("/[A-Za-z0-9._~/{}-]*");
   private static final Pattern SERVICE_NAME = Pattern.compile("[a-z][a-z0-9-]{1,62}");
   private static final Pattern WORK_LABEL_SUFFIX = Pattern.compile("[a-z][a-z0-9-]{0,30}");
+  private static final Pattern PURPOSE = Pattern.compile("[a-z][a-z0-9-]{0,40}");
 
   /** Where the runner id goes in {@link #registerPath}. */
   public static final String ID_PLACEHOLDER = "{id}";
@@ -183,6 +184,28 @@ public record RunnerIdentity(
   }
 
   /**
+   * {@code <namePrefix>-<purpose>-<id8>} — a per-node volume the domain asks for ({@code
+   * qits-workspaces-runner-dot-claude-1a2b3c4d}). The same spelling as {@link #nodeName}, kept as
+   * its own method so a volume reads as one at the call site.
+   */
+  public String nodeVolume(String id, String purpose) {
+    return nodeName(id, purpose);
+  }
+
+  /**
+   * {@code <namePrefix>-<purpose>-<id8>} — any other named resource of this runner on its node: a
+   * workload container, a builder, a network. The only way a domain spells a name, so every name
+   * it creates passes the prefix belt its removal is held to.
+   *
+   * @param id the runner id, or a work item's — the name carries its first eight characters
+   * @param purpose what the resource is for, {@code [a-z][a-z0-9-]{0,40}}
+   */
+  public String nodeName(String id, String purpose) {
+    require("purpose", purpose, PURPOSE);
+    return namePrefix + "-" + purpose + "-" + id8(id);
+  }
+
+  /**
    * Whether {@code name} is one this runner may remove by name: it starts with {@code
    * <namePrefix>-}. The decommission helper's belt, and every named removal's.
    */
@@ -193,7 +216,8 @@ public record RunnerIdentity(
   /** The first eight characters of a runner id, as every derived name spells it. */
   static String id8(String runnerId) {
     if (runnerId == null || runnerId.isEmpty()) {
-      throw new IllegalArgumentException("a derived name needs a runner id");
+      throw new IllegalArgumentException(
+          "a derived name needs an id to take its first eight characters from");
     }
     return runnerId.substring(0, Math.min(8, runnerId.length()));
   }

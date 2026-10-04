@@ -357,6 +357,16 @@ public final class LifecycleArgv {
     return require(VERSION, "runner version", version);
   }
 
+  /** A runner id, as a label value and a derived name both take it. */
+  public static String requireRunnerId(String runnerId) {
+    return require(NAME, "runner id", runnerId);
+  }
+
+  /** A work item's id, as the work-item label's value takes it. */
+  public static String requireWorkId(String workId) {
+    return require(NAME, "work item id", workId);
+  }
+
   /** The image belt. */
   public static String requireImage(String image) {
     return require(IMAGE, "image", image);

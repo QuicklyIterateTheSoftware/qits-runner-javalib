@@ -3,6 +3,7 @@ package eu.wohlben.qits.runner.toolkit;
 import eu.wohlben.qits.runner.protocol.RunnerMessage;
 import io.vertx.core.Vertx;
 import java.io.PrintStream;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -66,7 +67,7 @@ public final class RunnerLauncher {
     }
     String decommission = env.apply(identity.env(DECOMMISSION));
     if (decommission != null && !decommission.isBlank()) {
-      return decommissionHelper(identity, decommission.strip(), out);
+      return decommissionHelper(identity, decommission.strip(), env, out);
     }
     RunnerSettings settings;
     try {
@@ -122,17 +123,33 @@ public final class RunnerLauncher {
   }
 
   /**
-   * Helper mode. The node-lifecycle feature's {@code Decommission} helper runs here; a build
-   * without it has nothing to remove with, says so in the helper's own log (its {@code docker
-   * logs} is the whole record), and fails, so the helper container stays for a person to read.
+   * Helper mode: this process is a deleted runner's decommission helper ({@link Decommission}), not
+   * a runner. Like the version probe it needs no other setting — the docker binary, the state
+   * volume and the domain's teardown items arrive in its own environment — and writes plain lines:
+   * the helper's {@code docker logs} is the whole record of what it did.
    */
-  static int decommissionHelper(RunnerIdentity identity, String runnerId, PrintStream out) {
-    out.println(
-        identity.namePrefix()
-            + " decommission: this build has no decommission helper; runner "
-            + runnerId
-            + "'s containers and volumes are left for a person to remove");
-    return 1;
+  static int decommissionHelper(
+      RunnerIdentity identity, String runnerId, Function<String, String> env, PrintStream out) {
+    String say = identity.namePrefix() + " decommission: ";
+    String binary = env.apply(identity.env(RunnerSettings.DOCKER_BINARY));
+    String volume = env.apply(identity.env(LifecycleArgv.DECOMMISSION_VOLUME));
+    try {
+      return DecommissionHelper.finish(
+          identity,
+          new RunnerDocker(
+              identity,
+              binary == null || binary.isBlank() ? "docker" : binary.strip(),
+              Duration.ofSeconds(RunnerSettings.DEFAULT_DOCKER_TIMEOUT_SECONDS)),
+          runnerId,
+          volume == null || volume.isBlank() ? null : volume.strip(),
+          LifecycleArgv.decodeTeardown(env.apply(identity.env(LifecycleArgv.DECOMMISSION_TEARDOWN))),
+          SelfContainer.detect(),
+          Decommission.Settings.defaults(),
+          line -> out.println(say + line));
+    } catch (RuntimeException e) {
+      out.println(say + "failed: " + e.getMessage());
+      return 1;
+    }
   }
 
   /**

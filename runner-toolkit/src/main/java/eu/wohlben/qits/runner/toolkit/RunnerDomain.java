@@ -76,6 +76,15 @@ public interface RunnerDomain<D extends RunnerMessage> {
     return List.of();
   }
 
+  /**
+   * The domain's own garbage collection, run by the toolkit's housekeeping after its built-in
+   * passes: after the first {@code Ack}, then every six hours. See {@link HousekeepingPass} for
+   * what a pass may and may not do on a shared node.
+   */
+  default List<HousekeepingPass> housekeeping() {
+    return List.of();
+  }
+
   /** The socket dropped: held items are carried, slots and backlog are zero until the next Ack. */
   default void onSessionLost() {}
 }

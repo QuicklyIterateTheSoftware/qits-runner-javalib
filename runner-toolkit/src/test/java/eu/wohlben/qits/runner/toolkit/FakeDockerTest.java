@@ -39,7 +39,14 @@ class FakeDockerTest {
                     "QITS_TOY_RUNNER_ID", "r1",
                     "QITS_TOY_RUNNER_DOCKER_BINARY", docker.binary())
                 ::get);
-    return new RunnerSession(Toy.IDENTITY, settings, null).driver();
+    RunnerDocker runnerDocker = RunnerDocker.of(Toy.IDENTITY, settings);
+    return new RunnerSession(
+            Toy.IDENTITY,
+            settings,
+            runnerDocker,
+            new RegistryLogin(Toy.IDENTITY, runnerDocker, () -> null),
+            null)
+        .driver();
   }
 
   @Test

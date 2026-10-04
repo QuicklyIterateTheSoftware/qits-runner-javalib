@@ -64,6 +64,8 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   private final HostFacts host;
   private final Telemetry telemetry;
   private final NodeLifecycle lifecycle;
+  private final RunnerDocker docker;
+  private final RegistryLogin registry;
   private final RunnerCodec<D> codec;
   private final Class<D> domainType;
   private final Http http;
@@ -80,6 +82,9 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
   private volatile ControlSocket<D> socket;
   private volatile Bearer bearer;
+
+  /** The runner's own client pair, once registered: the registry login every pull is made under. */
+  private volatile ClientCredentials client;
 
   /**
    * The domain's removal of the carried items the host did not adopt, which every {@code Ack}'s
@@ -125,9 +130,10 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
         domain,
         host,
         telemetry,
-        NodeLifecycle.minimal(identity, settings.stateDir()));
+        NodeLifecycle.Options.defaults(settings));
   }
 
+  /** The same runtime in a container a suite names, with the node's clocks a suite shrinks. */
   RunnerRuntime(
       Vertx vertx,
       RunnerIdentity identity,
@@ -135,14 +141,17 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
       RunnerDomain<D> domain,
       HostFacts host,
       Telemetry telemetry,
-      NodeLifecycle lifecycle) {
+      NodeLifecycle.Options node) {
     this.vertx = vertx;
     this.identity = identity;
     this.settings = settings;
     this.domain = domain;
     this.host = host;
     this.telemetry = telemetry;
-    this.lifecycle = lifecycle;
+    this.docker = RunnerDocker.of(identity, settings);
+    this.registry = new RegistryLogin(identity, docker, () -> client);
+    this.lifecycle =
+        NodeLifecycle.onDocker(identity, settings, domain, docker, registry, node);
     this.codec = new RunnerCodec<>(identity.vocabulary(), domain.codec());
     this.domainType = domain.codec().messageType();
     this.http = new Http(vertx, settings.timing().httpTimeoutMillis());
@@ -154,7 +163,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
               thread.setDaemon(true);
               return thread;
             });
-    this.session = new RunnerSession(identity, settings, new SessionOps());
+    this.session = new RunnerSession(identity, settings, docker, registry, new SessionOps());
   }
 
   /**
@@ -169,6 +178,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
         client =
             new Registration(identity, http, settings.timing().httpTimeoutMillis())
                 .ensure(settings, capabilities);
+        this.client = client;
       } catch (Registration.Failed failed) {
         LOG.errorf("%s cannot start: %s. Exiting.", who, failed.getMessage());
         return failed.exitCode();
@@ -415,6 +425,8 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     }
     LOG.warnf("%s decommissions itself: %s", who, why);
     ledger.drain();
+    // No successor and no housekeeping pass may start from here on.
+    lifecycle.halt();
     ControlSocket<D> s = socket;
     if (s != null) {
       s.stop();

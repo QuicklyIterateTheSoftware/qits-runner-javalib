@@ -1,13 +1,9 @@
 package eu.wohlben.qits.runner.toolkit;
 
 import eu.wohlben.qits.containers.driver.ContainersDriver;
-import eu.wohlben.qits.containers.driver.DockerContainersDriver;
-import eu.wohlben.qits.containers.driver.DockerSocketGroup;
-import eu.wohlben.qits.containers.driver.spec.LabelNamespace;
 import eu.wohlben.qits.runner.protocol.RunnerMessage;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
@@ -40,12 +36,20 @@ public final class RunnerSession {
 
   private final RunnerIdentity identity;
   private final RunnerSettings settings;
+  private final RunnerDocker docker;
+  private final RegistryLogin registry;
   private final Ops ops;
-  private volatile ContainersDriver driver;
 
-  RunnerSession(RunnerIdentity identity, RunnerSettings settings, Ops ops) {
+  RunnerSession(
+      RunnerIdentity identity,
+      RunnerSettings settings,
+      RunnerDocker docker,
+      RegistryLogin registry,
+      Ops ops) {
     this.identity = identity;
     this.settings = settings;
+    this.docker = docker;
+    this.registry = registry;
     this.ops = ops;
   }
 
@@ -92,21 +96,17 @@ public final class RunnerSession {
    * so qits-containers-service's collection never sees a runner's workloads or volumes.
    */
   public ContainersDriver driver() {
-    ContainersDriver d = driver;
-    if (d == null) {
-      synchronized (this) {
-        d = driver;
-        if (d == null) {
-          d =
-              new DockerContainersDriver(
-                  settings.dockerBinary(),
-                  new LabelNamespace(identity.driverNamespace()),
-                  new DockerSocketGroup(Optional.empty())::value);
-          driver = d;
-        }
-      }
-    }
-    return d;
+    return docker.driver();
+  }
+
+  /**
+   * Pulls under the runner's own registry login — a throwaway {@code docker --config} holding its
+   * client pair, deleted after the pull — so a workload image comes from {@code
+   * registry.qits.<domain>} without the host's docker config ever being written. The same login a
+   * self-update's pull is made under.
+   */
+  public RegistryLogin registry() {
+    return registry;
   }
 
   /** The runner's access token — the cached one, or a fresh mint. Never logged, never stored. */

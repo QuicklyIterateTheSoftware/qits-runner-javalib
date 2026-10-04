@@ -133,6 +133,72 @@ public record RunnerIdentity(
   }
 
   /**
+   * {@code <labelRoot>} — the ownership label every workload container and volume of this runner
+   * carries, valued with the runner id. What the decommission helper removes by, and nothing else.
+   */
+  public String ownerLabel() {
+    return labelRoot;
+  }
+
+  /** {@code <labelRoot>.<workLabelSuffix>} — which work item a workload belongs to. */
+  public String workLabel() {
+    return labelRoot + "." + workLabelSuffix;
+  }
+
+  /**
+   * {@code <labelRoot>.process} — the runner's OWN container, valued with the runner id.
+   * Deliberately not {@link #ownerLabel()}: a sweep of the owner label would otherwise remove the
+   * runner itself.
+   */
+  public String processLabel() {
+    return labelRoot + ".process";
+  }
+
+  /** {@code <labelRoot>.version} — which version a runner container runs. */
+  public String versionLabel() {
+    return labelRoot + ".version";
+  }
+
+  /**
+   * {@code <labelRoot>.decommission} — the decommission helper's label, neither {@link
+   * #processLabel()} nor {@link #ownerLabel()}, so the helper never matches its own selection.
+   */
+  public String decommissionLabel() {
+    return labelRoot + ".decommission";
+  }
+
+  /** {@code <namePrefix>-<id8>-<version>} — the runner container of {@code version}. */
+  public String containerName(String runnerId, String version) {
+    return namePrefix + "-" + id8(runnerId) + "-" + version;
+  }
+
+  /** {@code <namePrefix>-<id8>-decommission} — one helper per runner. */
+  public String helperName(String runnerId) {
+    return namePrefix + "-" + id8(runnerId) + "-decommission";
+  }
+
+  /** {@code <namePrefix>-state-<id8>} — the volume holding {@code client.json}. */
+  public String stateVolume(String runnerId) {
+    return namePrefix + "-state-" + id8(runnerId);
+  }
+
+  /**
+   * Whether {@code name} is one this runner may remove by name: it starts with {@code
+   * <namePrefix>-}. The decommission helper's belt, and every named removal's.
+   */
+  public boolean ownsName(String name) {
+    return name != null && name.startsWith(namePrefix + "-");
+  }
+
+  /** The first eight characters of a runner id, as every derived name spells it. */
+  static String id8(String runnerId) {
+    if (runnerId == null || runnerId.isEmpty()) {
+      throw new IllegalArgumentException("a derived name needs a runner id");
+    }
+    return runnerId.substring(0, Math.min(8, runnerId.length()));
+  }
+
+  /**
    * {@code <labelRoot>.self-update} — the capability label a runner with self-update switched off
    * advertises as {@code false}.
    */

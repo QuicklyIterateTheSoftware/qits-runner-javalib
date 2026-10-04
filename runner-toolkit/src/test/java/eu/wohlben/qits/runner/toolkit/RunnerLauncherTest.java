@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import eu.wohlben.qits.runner.toolkit.testing.FakeDocker;
 import io.vertx.core.Vertx;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -11,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
@@ -78,16 +80,40 @@ class RunnerLauncherTest {
   }
 
   @Test
-  void theDecommissionVariableIsHelperModeNotARunner() {
+  void theDecommissionVariableIsHelperModeNotARunner(@TempDir Path dockerDir) throws Exception {
+    FakeDocker docker = new FakeDocker(dockerDir);
+    docker.volume("qits-toy-runner-state-r1", Map.of());
+    docker.volume("qits-toy-runner-cache-r1", Map.of("qits.toy.runner", "r1"));
+    docker.volume("qits-ci-runner-state-r1", Map.of("qits.ci.runner", "r1"));
+    docker.container("qits-toy-runner-builder-r1", Map.of());
+    docker.container("qits-ci-runner-buildkitd", Map.of());
     int code =
         launch(
             Map.of(
                 "QITS_TOY_RUNNER_DECOMMISSION", "r1",
+                "QITS_TOY_RUNNER_DECOMMISSION_VOLUME", "qits-toy-runner-state-r1",
+                "QITS_TOY_RUNNER_DECOMMISSION_TEARDOWN",
+                    "container:qits-toy-runner-builder-r1,container:qits-ci-runner-buildkitd",
+                "QITS_TOY_RUNNER_DOCKER_BINARY", docker.binary(),
                 "QITS_TOY_RUNNER_URL", "http://127.0.0.1:1",
                 "QITS_TOY_RUNNER_ID", "r1"));
-    assertEquals(1, code, "no helper in this build: it fails, and stays with its log");
+    assertEquals(0, code, printed());
     assertTrue(printed().startsWith("qits-toy-runner decommission: "), printed());
+    assertTrue(printed().contains("refused to remove the container qits-ci-runner-buildkitd"));
     assertFalse(built.get(), "no runner was started");
+    assertEquals(Set.of("qits-ci-runner-state-r1"), docker.volumes().keySet());
+    assertEquals(Set.of("qits-ci-runner-buildkitd"), docker.containers().keySet());
+  }
+
+  @Test
+  void aHelperThatCannotReachDockerFailsAndStaysWithItsLog() {
+    int code =
+        launch(
+            Map.of(
+                "QITS_TOY_RUNNER_DECOMMISSION", "r1",
+                "QITS_TOY_RUNNER_DOCKER_BINARY", state.resolve("no-such-docker").toString()));
+    assertEquals(1, code, printed());
+    assertTrue(printed().contains("this helper stays"), printed());
   }
 
   @Test

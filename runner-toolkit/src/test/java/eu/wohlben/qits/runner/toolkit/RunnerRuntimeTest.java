@@ -19,11 +19,21 @@ import eu.wohlben.qits.runner.protocol.Upgrade;
 import eu.wohlben.qits.runner.toolkit.testing.FakeDocker;
 import eu.wohlben.qits.runner.toolkit.testing.FakeRunnerHost;
 import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -60,6 +70,15 @@ class RunnerRuntimeTest {
 
   /** How long an invalid_client streak must last to be believed; production's is five minutes. */
   private long refusalConfirmMillis = 300_000;
+
+  /** The runner's own container, as HOSTNAME would name it. */
+  private static final String SELF = "0123456789ab";
+
+  private Optional<String> self = Optional.of(SELF);
+  private SelfUpdate.Settings selfUpdateSettings =
+      new SelfUpdate.Settings(100, 400, 3_000, 3_000, 50);
+  private Housekeeping.Settings housekeepingSettings = Housekeeping.Settings.defaults();
+  private Clock clock = Clock.systemUTC();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -101,7 +120,13 @@ class RunnerRuntimeTest {
             settings(token, heartbeatMillis),
             domain,
             new HostFacts(true, "amd64", "linux"),
-            telemetry);
+            telemetry,
+            new NodeLifecycle.Options(
+                self,
+                selfUpdateSettings,
+                new Decommission.Settings(200, 20, 2),
+                housekeepingSettings,
+                clock));
     exit = CompletableFuture.supplyAsync(runner::run);
     return exit;
   }
@@ -365,7 +390,9 @@ class RunnerRuntimeTest {
     host.await(Reserve.class, 2);
     Thread.sleep(300);
     assertFalse(runner.ledger().draining(), "nothing to drain for");
-    assertTrue(docker.calls().isEmpty(), "no pull, no successor: " + docker.calls());
+    assertTrue(
+        docker.calls("pull").isEmpty() && docker.calls("run").isEmpty(),
+        "no pull, no successor: " + docker.calls());
     assertFalse(exit.isDone());
   }
 
@@ -429,9 +456,11 @@ class RunnerRuntimeTest {
     host.send(new Toy.Release("item-a"));
     awaitTrue(() -> domain.messages.size() == 2);
     Thread.sleep(200);
+    assertEquals(2, domain.messages.size(), domain.messages::toString);
+    // As a set: domain frames run on a cached worker pool, which promises no order between two.
     assertEquals(
-        List.of(new Toy.Take("item-a"), new Toy.Release("item-a")),
-        domain.messages,
+        java.util.Set.of(new Toy.Take("item-a"), new Toy.Release("item-a")),
+        java.util.Set.copyOf(domain.messages),
         "only the domain's own frames, in the domain's own types");
   }
 
@@ -575,6 +604,542 @@ class RunnerRuntimeTest {
     assertEquals(
         "logged before the bearer",
         OtlpDecode.decode(host.telemetryBodies.getFirst()).lines().getFirst().body());
+  }
+
+  // ---- self-update ------------------------------------------------------------------------------
+
+  private static final String NEXT = "2026.999.1";
+  private static final String IMAGE = "registry.example:5000/qits/qits-toy-runner:" + NEXT;
+  private static final String DIGEST =
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  private static final String SUCCESSOR = "qits-toy-runner-r1-" + NEXT;
+
+  /**
+   * A fake docker that answers like the runner's own container: its inspect (what the install
+   * script started), its old image's config, and the pulled image's digest.
+   *
+   * <p>Deliberately no {@code Mounts} key on the container at all — {@code HostConfig} carries
+   * {@code Binds} only, which is docker's real shape for a container started with {@code -v} and
+   * never {@code --mount}, and is exactly what broke CI's old {@code --format} template (qits-463).
+   */
+  private void runnerContainer() throws Exception {
+    docker.answerFor(
+        "inspect",
+        SELF,
+        0,
+        new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("Id", SELF + "0".repeat(52))
+                        .put("Image", "sha256:old")
+                        .put(
+                            "Config",
+                            new JsonObject()
+                                .put(
+                                    "Env",
+                                    List.of(
+                                        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                                        "DOCKER_VERSION=29.8.1",
+                                        "QITS_TOY_RUNNER_URL=https://toy.qits.example.eu",
+                                        "QITS_TOY_RUNNER_ID=r1",
+                                        "QITS_TOY_RUNNER_SLOTS=2",
+                                        "QITS_TOY_RUNNER_REGISTRATION_TOKEN=qits_tok_SPENT"))
+                                .put(
+                                    "Labels",
+                                    Map.of(
+                                        "qits.toy.runner.process", "r1",
+                                        "qits.toy.runner.version", Toy.VERSION,
+                                        "org.opencontainers.image.version", "29.8.1")))
+                        .put(
+                            "HostConfig",
+                            new JsonObject()
+                                .put(
+                                    "Binds",
+                                    List.of(
+                                        "/var/run/docker.sock:/var/run/docker.sock",
+                                        "qits-toy-runner-state-r1:/var/lib/qits-toy-runner"))
+                                .put(
+                                    "RestartPolicy",
+                                    Map.of("Name", "unless-stopped", "MaximumRetryCount", 0))
+                                .put("NetworkMode", "default")))
+                .encode()
+            + "\n",
+        "");
+    docker.answerFor(
+        "image-inspect",
+        "sha256:old",
+        0,
+        new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("Id", "sha256:old")
+                        .put(
+                            "Config",
+                            new JsonObject()
+                                .put(
+                                    "Env",
+                                    List.of(
+                                        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                                        "DOCKER_VERSION=29.8.1"))
+                                .put("Labels", Map.of("org.opencontainers.image.version", "29.8.1"))))
+                .encode()
+            + "\n",
+        "");
+    docker.answerFor(
+        "image-inspect",
+        IMAGE,
+        0,
+        "[\"registry.example:5000/qits/qits-toy-runner@" + DIGEST + "\"]\n",
+        "");
+  }
+
+  private static final List<String> SUCCESSOR_RUN =
+      List.of(
+          "run",
+          "-d",
+          "--name",
+          SUCCESSOR,
+          "--restart",
+          "unless-stopped",
+          "--label",
+          "qits.toy.runner.process=r1",
+          "--label",
+          "qits.toy.runner.version=" + NEXT,
+          "-v",
+          "/var/run/docker.sock:/var/run/docker.sock",
+          "-v",
+          "qits-toy-runner-state-r1:/var/lib/qits-toy-runner",
+          "-e",
+          "QITS_TOY_RUNNER_ID=r1",
+          "-e",
+          "QITS_TOY_RUNNER_SLOTS=2",
+          "-e",
+          "QITS_TOY_RUNNER_URL=https://toy.qits.example.eu",
+          IMAGE);
+
+  private void awaitCall(java.util.function.Predicate<List<List<String>>> condition)
+      throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+    while (!condition.test(docker.calls()) && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+    }
+    assertTrue(condition.test(docker.calls()), () -> "docker calls: " + docker.calls());
+  }
+
+  private static boolean has(List<List<String>> calls, List<String> call) {
+    return calls.stream().map(FakeDocker::withoutConfig).anyMatch(call::equals);
+  }
+
+  /** Take one item and hold it; answers once the runner counts it. */
+  private void holdAnItem() throws Exception {
+    host.script =
+        (h, message) -> {
+          if (message instanceof Hello) {
+            h.send(new Ack(Toy.IDENTITY.capabilityVersion(), 2));
+            h.send(new Backlog(1));
+          } else if (message instanceof Reserve) {
+            h.send(new Toy.Take("item-a"));
+          }
+        };
+    start("t", 10_000);
+    host.await(Reserve.class);
+    awaitHeld(1);
+  }
+
+  @Test
+  void anUpgradeDrainsAndStartsTheSuccessorOnlyOnceTheDomainIsQuiescent() throws Exception {
+    domain.quiescent = false;
+    runnerContainer();
+    holdAnItem();
+
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+    host.send(new Backlog(5));
+    awaitCall(c -> has(c, List.of("pull", IMAGE)));
+    Thread.sleep(300);
+    assertEquals(1, host.all(Reserve.class).size(), "a draining runner reserves nothing");
+    assertTrue(docker.calls("run").isEmpty(), "no successor while the domain is busy");
+
+    // No frame, no freed slot: the domain merely says it is quiescent now, and the poll sees it.
+    domain.quiescent = true;
+    awaitCall(c -> !docker.calls("run").isEmpty());
+    assertEquals(SUCCESSOR_RUN, docker.calls("run").getFirst());
+    assertEquals(1, host.all(Reserve.class).size(), "nothing is refilled while draining");
+    assertFalse(exit.isDone(), "the old process stays until it is retired");
+  }
+
+  /**
+   * A workspace runner's containers outlive the runner process, so it holds work and is quiescent
+   * at once: the rollover goes ahead without a drain that would never finish.
+   */
+  @Test
+  void aDomainThatHoldsWorkButIsQuiescentRollsOverWithoutWaiting() throws Exception {
+    runnerContainer();
+    holdAnItem();
+
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+    awaitCall(c -> !docker.calls("run").isEmpty());
+    assertEquals(SUCCESSOR_RUN, docker.calls("run").getFirst());
+    assertEquals(List.of("item-a"), runner.session().held(), "the item is still held");
+  }
+
+  @Test
+  void theUpgradePullRunsUnderAThrowawayLoginMadeOfTheRunnersOwnClientPair() throws Exception {
+    runnerContainer();
+    ackWith(2, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    host.send(new Upgrade(NEXT, IMAGE, null));
+    awaitCall(c -> !docker.calls("run").isEmpty());
+
+    List<String> pull =
+        docker.calls().stream().filter(c -> c.contains("pull")).findFirst().orElseThrow();
+    assertEquals("--config", pull.get(0));
+    assertEquals(List.of("pull", IMAGE), pull.subList(2, 4));
+    assertFalse(Files.exists(Path.of(pull.get(1))), "the login directory is removed after the pull");
+    List<String> config = docker.configs().getFirst();
+    assertEquals("700 600", config.get(0), "directory 0700, config.json 0600");
+    String auth =
+        Base64.getEncoder()
+            .encodeToString(
+                "toy-runner-r1:client-secret".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    assertEquals(
+        new JsonObject()
+            .put(
+                "auths",
+                new JsonObject()
+                    .put("registry.example:5000", new JsonObject().put("auth", auth))),
+        new JsonObject(config.get(1)));
+    assertTrue(
+        docker.calls().stream()
+            .flatMap(List::stream)
+            .noneMatch(a -> a.contains("runner-access-token")),
+        "the bearer is in no argv");
+    assertTrue(
+        docker.calls().stream().flatMap(List::stream).noneMatch(a -> a.contains("client-secret")),
+        "the client secret is in no argv");
+  }
+
+  @Test
+  void aPulledImageWithAnotherDigestIsNeverStartedAndThePullIsRetried() throws Exception {
+    runnerContainer();
+    docker.answerFor(
+        "image-inspect",
+        IMAGE,
+        0,
+        "[\"registry.example:5000/qits/qits-toy-runner@sha256:beef\"]\n",
+        "");
+    ackWith(2, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST.substring("sha256:".length())));
+    awaitCall(c -> docker.calls("pull").size() >= 2);
+    assertTrue(docker.calls("run").isEmpty(), "an image that is not the expected one is not run");
+  }
+
+  @Test
+  void aRetireWithinTheWatchTakesTheRestartPolicyAwayAndExitsZero() throws Exception {
+    runnerContainer();
+    ackWith(2, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+    awaitCall(c -> !docker.calls("run").isEmpty());
+
+    host.send(new Retire("superseded by " + NEXT));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    assertTrue(has(docker.calls(), List.of("update", "--restart=no", SELF)), docker.calls()::toString);
+    List<List<String>> calls = docker.calls();
+    assertFalse(
+        calls.subList(calls.indexOf(SUCCESSOR_RUN) + 1, calls.size())
+            .contains(List.of("rm", "-f", SUCCESSOR)),
+        "the successor is left running");
+  }
+
+  @Test
+  void aSuccessorThatDoesNotTakeOverIsRemovedAndTheRunnerStaysDrainingAndRetries()
+      throws Exception {
+    selfUpdateSettings = new SelfUpdate.Settings(100, 400, 300, 3_000, 50);
+    runnerContainer();
+    ackWith(2, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+
+    // Started, not retired within the watch, removed — and started again on the retry.
+    awaitCall(c -> docker.calls("run").size() >= 2);
+    List<List<String>> calls = docker.calls();
+    int firstRun = calls.indexOf(SUCCESSOR_RUN);
+    assertTrue(
+        calls.subList(firstRun + 1, calls.size()).contains(List.of("rm", "-f", SUCCESSOR)),
+        calls::toString);
+    assertFalse(has(calls, List.of("update", "--restart=no", SELF)), "it never took itself out");
+    host.send(new Backlog(3));
+    Thread.sleep(300);
+    assertTrue(host.all(Reserve.class).isEmpty(), "still draining");
+    assertFalse(exit.isDone());
+  }
+
+  @Test
+  void aRetireWhileTheUpgradeHasNoSuccessorRunningIsIgnored() throws Exception {
+    domain.quiescent = false;
+    runnerContainer();
+    holdAnItem();
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+    awaitCall(c -> has(c, List.of("pull", IMAGE)));
+
+    host.send(new Retire("a runner of " + NEXT + " said Hello"));
+    Thread.sleep(500);
+    assertFalse(exit.isDone(), "leaving now would leave the host with no runner at all");
+    assertFalse(has(docker.calls(), List.of("update", "--restart=no", SELF)));
+  }
+
+  @Test
+  void aRetireWithNoUpgradeAskedForIsTheSameOrderlyExit() throws Exception {
+    ackWith(1, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    host.send(new Retire("decommissioned"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    assertTrue(has(docker.calls(), List.of("update", "--restart=no", SELF)), docker.calls()::toString);
+    assertNoHelper();
+  }
+
+  // --- a deleted runner ---------------------------------------------------------------------------
+
+  private static final List<String> HELPER_RUN =
+      List.of(
+          "run",
+          "-d",
+          "--name",
+          "qits-toy-runner-r1-decommission",
+          "--network",
+          "none",
+          "--label",
+          "qits.toy.runner.decommission=r1",
+          "-v",
+          "/var/run/docker.sock:/var/run/docker.sock",
+          "-e",
+          "QITS_TOY_RUNNER_DECOMMISSION=r1",
+          "-e",
+          "QITS_TOY_RUNNER_DECOMMISSION_VOLUME=qits-toy-runner-state-r1",
+          "sha256:old");
+
+  /**
+   * The runner's own container as {@code docker inspect} answers it, with the state volume mounted
+   * at this test's state directory — where {@link Decommission} looks for it.
+   */
+  private void containerWithStateVolume() throws Exception {
+    docker.answerFor(
+        "inspect",
+        SELF,
+        0,
+        new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("Id", SELF + "0".repeat(52))
+                        .put("Image", "sha256:old")
+                        .put(
+                            "Mounts",
+                            new JsonArray()
+                                .add(
+                                    new JsonObject()
+                                        .put("Type", "bind")
+                                        .put("Source", "/var/run/docker.sock")
+                                        .put("Destination", "/var/run/docker.sock"))
+                                .add(
+                                    new JsonObject()
+                                        .put("Type", "volume")
+                                        .put("Name", "qits-toy-runner-state-r1")
+                                        .put("Destination", state.toString())))
+                        .put(
+                            "HostConfig",
+                            new JsonObject()
+                                .put("RestartPolicy", Map.of("Name", "unless-stopped"))))
+                .encode()
+            + "\n",
+        "");
+  }
+
+  /** Neither the helper nor a volume removal: what a self-update's retirement must never do. */
+  private void assertNoHelper() {
+    assertFalse(docker.calls().contains(HELPER_RUN), docker.calls()::toString);
+    assertTrue(
+        docker.calls().stream()
+            .noneMatch(c -> c.contains("volume") || String.join(" ", c).contains("DECOMMISSION")),
+        docker.calls()::toString);
+    assertTrue(Files.exists(state.resolve("client.json")), "a successor dials with this client");
+  }
+
+  /** The decommission's docker half, in order: stay down, then the helper. */
+  private void assertHandedToTheHelper() {
+    List<List<String>> calls = docker.calls();
+    int stayDown = calls.indexOf(List.of("update", "--restart=no", SELF));
+    int helper = calls.indexOf(HELPER_RUN);
+    assertTrue(stayDown >= 0, calls::toString);
+    assertTrue(helper > stayDown, calls::toString);
+    assertDecommissioned();
+  }
+
+  @Test
+  void aDeletedRetireCancelsHeldRunsStaysDownAndHandsContainerAndVolumeToTheHelper()
+      throws Exception {
+    containerWithStateVolume();
+    // The domain's own stop: its held item's container, through the session's driver.
+    domain.decommissioning =
+        session -> session.driver().remove("toy-item-a", Duration.ofSeconds(5));
+    holdAnItem();
+
+    host.send(Retire.deleted("deleted by admin"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    assertHandedToTheHelper();
+    List<List<String>> calls = docker.calls();
+    assertTrue(
+        calls.indexOf(List.of("rm", "-f", "toy-item-a"))
+            < calls.indexOf(List.of("update", "--restart=no", SELF)),
+        "the domain's work goes first: " + calls);
+    host.send(new Backlog(3));
+    Thread.sleep(200);
+    assertEquals(1, host.all(Reserve.class).size(), "a deleted runner takes no more work");
+    assertEquals(1, host.upgrades.get(), "and never dials again");
+  }
+
+  @Test
+  void aDeletedRetireMidRolloverStillDecommissionsWhereASupersededOneWouldBeIgnored()
+      throws Exception {
+    domain.quiescent = false;
+    runnerContainer();
+    containerWithStateVolume();
+    holdAnItem();
+    host.send(new Upgrade(NEXT, IMAGE, DIGEST));
+    awaitCall(c -> has(c, List.of("pull", IMAGE)));
+
+    host.send(Retire.deleted("deleted by admin"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    assertHandedToTheHelper();
+    assertTrue(docker.calls("run").stream().noneMatch(c -> c.contains(SUCCESSOR)), "no successor");
+  }
+
+  @Test
+  void theDomainsTeardownItemsTravelToTheHelper() throws Exception {
+    containerWithStateVolume();
+    domain.teardown =
+        List.of(new TeardownItem(TeardownItem.Type.CONTAINER, "qits-toy-runner-builder-r1"));
+    ackWith(1, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    host.send(Retire.deleted("deleted by admin"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    List<String> helper = docker.calls("run").getFirst();
+    assertTrue(
+        helper.contains("QITS_TOY_RUNNER_DECOMMISSION_TEARDOWN=container:qits-toy-runner-builder-r1"),
+        helper::toString);
+  }
+
+  @Test
+  void theFirstAckRemovesExitedAndLingeringPredecessorsAndNeverItself() throws Exception {
+    selfUpdateSettings = new SelfUpdate.Settings(100, 400, 3_000, 400, 50);
+    docker.answerFor(
+        "ps",
+        "label=qits.toy.runner.process=r1",
+        0,
+        String.join(
+            "\n",
+            "0123456789ab|" + Toy.VERSION + "|running",
+            "aaaaaaaaaaaa|2026.900.1|exited",
+            "bbbbbbbbbbbb|2026.900.2|running",
+            "cccccccccccc|2026.900.3|running",
+            ""),
+        "");
+    docker.answerFor("inspect", "bbbbbbbbbbbb", 0, "exited\n", "");
+    docker.answerFor("inspect", "cccccccccccc", 0, "running\n", "");
+    ackWith(1, 0);
+    start("t", 10_000);
+
+    awaitCall(c -> has(c, List.of("rm", "-f", "cccccccccccc")));
+    List<List<String>> calls = docker.calls();
+    assertTrue(
+        calls.contains(
+            List.of(
+                "ps",
+                "-a",
+                "--format",
+                "{{.ID}}|{{.Label \"qits.toy.runner.version\"}}|{{.State}}|{{.Image}}",
+                "--filter",
+                "label=qits.toy.runner.process=r1")),
+        calls::toString);
+    assertTrue(calls.contains(List.of("rm", "-f", "aaaaaaaaaaaa")), "the exited predecessor");
+    assertTrue(
+        calls.contains(List.of("rm", "-f", "bbbbbbbbbbbb")), "the one that exited while waited on");
+    int waited =
+        calls.indexOf(List.of("inspect", "--format", "{{.State.Status}}", "bbbbbbbbbbbb"));
+    assertTrue(waited >= 0 && waited < calls.indexOf(List.of("rm", "-f", "bbbbbbbbbbbb")));
+    assertFalse(calls.contains(List.of("rm", "-f", SELF)), "never itself");
+    // A reconnect's Ack does not look for predecessors again: once per process.
+    host.socket.close();
+    host.await(Hello.class, 2);
+    Thread.sleep(300);
+    assertEquals(
+        1,
+        docker.calls("ps").stream()
+            .filter(c -> c.contains("label=qits.toy.runner.process=r1"))
+            .count(),
+        docker.calls()::toString);
+  }
+
+  // --- housekeeping -------------------------------------------------------------------------------
+
+  @Test
+  void housekeepingRunsAfterTheFirstAckThenOnItsIntervalAndRunsTheDomainsPasses()
+      throws Exception {
+    housekeepingSettings = new Housekeeping.Settings(150);
+    clock = Clock.fixed(Instant.parse("2026-10-04T00:00:00Z"), ZoneOffset.UTC);
+    List<HousekeepingContext> seen = Collections.synchronizedList(new ArrayList<>());
+    domain.passes.add(
+        new HousekeepingPass() {
+          @Override
+          public String name() {
+            return "toy";
+          }
+
+          @Override
+          public void run(HousekeepingContext context) {
+            seen.add(context);
+          }
+        });
+    host.script = (h, message) -> {};
+    start("t", 0);
+    host.await(Hello.class);
+    Thread.sleep(400);
+    assertTrue(seen.isEmpty(), "not before the runner is proven on the wire");
+    assertTrue(docker.calls("image").isEmpty(), docker.calls()::toString);
+
+    host.send(new Ack(Toy.IDENTITY.capabilityVersion(), 1));
+    awaitTrue(() -> seen.size() >= 3);
+    HousekeepingContext context = seen.getFirst();
+    assertEquals(clock, context.clock(), "the injected clock");
+    assertEquals("r1", context.runnerId());
+    assertEquals(state, context.stateDir());
+    List<List<String>> prunes =
+        docker.calls("image").stream().filter(c -> c.contains("prune")).toList();
+    assertTrue(prunes.size() >= 3, docker.calls()::toString);
+    assertTrue(prunes.stream().allMatch(c -> c.equals(List.of("image", "prune", "-f"))));
+
+    // Decommissioned: no pass after it.
+    host.send(Retire.deleted("deleted by admin"));
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    int after = seen.size();
+    Thread.sleep(500);
+    assertEquals(after, seen.size(), "housekeeping stops on decommission");
   }
 
   private static void awaitTrue(BooleanSupplier condition) throws InterruptedException {

@@ -102,6 +102,13 @@ final class Toy {
     final List<Message> messages = Collections.synchronizedList(new ArrayList<>());
     final List<List<String>> dropped = Collections.synchronizedList(new ArrayList<>());
     volatile boolean quiescent = true;
+    volatile List<TeardownItem> teardown = List.of();
+
+    /** The domain's own housekeeping passes; read once, when the runtime is built. */
+    final List<HousekeepingPass> passes = new ArrayList<>();
+
+    /** What {@link #onDecommission} does besides recording itself — a suite's own docker work. */
+    volatile java.util.function.Consumer<RunnerSession> decommissioning = session -> {};
 
     @Override
     public DomainCodec<Message> codec() {
@@ -151,6 +158,17 @@ final class Toy {
     @Override
     public void onDecommission(RunnerSession session) {
       events.add("decommission");
+      decommissioning.accept(session);
+    }
+
+    @Override
+    public List<TeardownItem> teardown() {
+      return teardown;
+    }
+
+    @Override
+    public List<HousekeepingPass> housekeeping() {
+      return passes;
     }
 
     @Override

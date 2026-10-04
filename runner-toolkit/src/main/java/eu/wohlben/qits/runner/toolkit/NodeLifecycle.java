@@ -2,10 +2,8 @@ package eu.wohlben.qits.runner.toolkit;
 
 import eu.wohlben.qits.runner.protocol.Retire;
 import eu.wohlben.qits.runner.protocol.Upgrade;
-import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import org.jboss.logging.Logger;
 
 /**
@@ -52,28 +50,6 @@ interface NodeLifecycle {
   /** The process is ending: stop whatever this seam scheduled. */
   void shutdown();
 
-  /**
-   * What the runtime cannot read off its settings: which container it is in, and the clocks under
-   * the node's work. {@link #defaults} is production's; a suite names its own container and shrinks
-   * every clock.
-   */
-  record Options(
-      Optional<String> self,
-      SelfUpdate.Settings selfUpdate,
-      Decommission.Settings decommission,
-      Housekeeping.Settings housekeeping,
-      Clock clock) {
-
-    static Options defaults(RunnerSettings settings) {
-      return new Options(
-          SelfContainer.detect(),
-          SelfUpdate.Settings.defaults(settings.rolloverTimeoutSeconds()),
-          Decommission.Settings.defaults(),
-          Housekeeping.Settings.defaults(),
-          Clock.systemUTC());
-    }
-  }
-
   /** The node lifecycle on the runner's own docker. */
   static NodeLifecycle onDocker(
       RunnerIdentity identity,
@@ -81,7 +57,7 @@ interface NodeLifecycle {
       RunnerDomain<?> domain,
       RunnerDocker docker,
       RegistryLogin login,
-      Options options) {
+      RunnerRuntime.NodeOptions options) {
     RunnerImages images = new RunnerImages(identity, docker, options.self());
     SelfUpdate selfUpdate =
         new SelfUpdate(

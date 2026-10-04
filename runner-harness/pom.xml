@@ -38,6 +38,25 @@
     </dependencies>
 
     <build>
+        <!-- FILTERING IS ON FOR ONE RESOURCE AND NOTHING ELSE: the harness's version, which
+             HarnessIdentity reads through RunnerBinaryVersion as a real runner's protocol jar does
+             (its version is its image tag). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>eu/wohlben/qits/runner/harness/harness-binary.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>eu/wohlben/qits/runner/harness/harness-binary.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>

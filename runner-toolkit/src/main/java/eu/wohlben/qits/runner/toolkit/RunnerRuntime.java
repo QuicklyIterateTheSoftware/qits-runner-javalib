@@ -15,9 +15,11 @@ import eu.wohlben.qits.runner.protocol.RunnerMessage;
 import eu.wohlben.qits.runner.protocol.Upgrade;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
+import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
@@ -130,18 +132,57 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
         domain,
         host,
         telemetry,
-        NodeLifecycle.Options.defaults(settings));
+        NodeOptions.defaults(settings));
   }
 
-  /** The same runtime in a container a suite names, with the node's clocks a suite shrinks. */
-  RunnerRuntime(
+  /**
+   * What the runtime cannot read off its settings: which container it is in, and the clocks under
+   * the node's work. {@link #defaults} is production's — the container detected from {@code
+   * /proc/self/mountinfo}, CI's clocks.
+   *
+   * <p><b>Public for an embedder's suite</b>, which drives its whole runner against {@code
+   * FakeRunnerHost} and {@code FakeDocker} from outside this package (the harness, qits-624's
+   * runner): it names the container the runner is "in", so a self-update and a decommission have a
+   * container to inspect, and it shrinks the clocks. Production never builds one by hand; {@link
+   * RunnerLauncher} uses the defaults.
+   *
+   * @param self the runner's own container id, or empty when it is not in one (then there is no
+   *     self-update and no helper)
+   * @param selfUpdate the rollover's retry, watch and poll clocks
+   * @param decommission the helper's waits
+   * @param housekeeping the GC interval
+   * @param clock what a housekeeping pass reads as now
+   */
+  public record NodeOptions(
+      Optional<String> self,
+      SelfUpdate.Settings selfUpdate,
+      Decommission.Settings decommission,
+      Housekeeping.Settings housekeeping,
+      Clock clock) {
+
+    /** Production's: the detected container and every default clock. */
+    public static NodeOptions defaults(RunnerSettings settings) {
+      return new NodeOptions(
+          SelfContainer.detect(),
+          SelfUpdate.Settings.defaults(settings.rolloverTimeoutSeconds()),
+          Decommission.Settings.defaults(),
+          Housekeeping.Settings.defaults(),
+          Clock.systemUTC());
+    }
+  }
+
+  /**
+   * The same runtime in a container a suite names, with the node's clocks a suite shrinks — the
+   * entry an embedder's suite drives its runner through ({@link NodeOptions}).
+   */
+  public RunnerRuntime(
       Vertx vertx,
       RunnerIdentity identity,
       RunnerSettings settings,
       RunnerDomain<D> domain,
       HostFacts host,
       Telemetry telemetry,
-      NodeLifecycle.Options node) {
+      NodeOptions node) {
     this.vertx = vertx;
     this.identity = identity;
     this.settings = settings;

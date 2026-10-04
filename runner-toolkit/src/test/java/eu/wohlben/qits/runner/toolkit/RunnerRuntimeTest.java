@@ -121,7 +121,7 @@ class RunnerRuntimeTest {
             domain,
             new HostFacts(true, "amd64", "linux"),
             telemetry,
-            new NodeLifecycle.Options(
+            new RunnerRuntime.NodeOptions(
                 self,
                 selfUpdateSettings,
                 new Decommission.Settings(200, 20, 2),

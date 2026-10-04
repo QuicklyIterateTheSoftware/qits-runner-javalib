@@ -151,7 +151,7 @@ class TwoRunnersOneNodeTest {
               domain,
               new HostFacts(true, "amd64", "linux"),
               Telemetry.off(),
-              new NodeLifecycle.Options(
+              new RunnerRuntime.NodeOptions(
                   Optional.of(self),
                   // The successor's watch outlasts the suite: the old runner is still there,
                   // draining, when it is deleted — the decommission has two runner containers.

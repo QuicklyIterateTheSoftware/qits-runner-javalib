@@ -44,8 +44,9 @@ import java.util.regex.Pattern;
  * arrive from an environment rather than from this class.
  *
  * <p><b>Pure {@code java.*}, by rule.</b> A server links this package and {@link RunnerIdentity}
- * from the toolkit jar with a {@code *:*} exclusion, so neither Vert.x nor the containers driver nor
- * a logging API reaches a Quarkus service; {@code InstallPackageIsDependencyFreeTest} keeps it so.
+ * from the toolkit jar, and {@code RunnerIdentity}'s {@code RunnerVocabulary} from the protocol jar,
+ * pinning both with a {@code *:*} exclusion each, so neither Vert.x nor the containers driver nor a
+ * logging API reaches a Quarkus service; {@code InstallPackageIsDependencyFreeTest} keeps it so.
  */
 public final class InstallScript {
 

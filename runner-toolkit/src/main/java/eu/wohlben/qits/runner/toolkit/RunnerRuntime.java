@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jboss.logging.Logger;
 
@@ -282,7 +283,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     // The domain's session start is docker work, so it runs off the loop and the Hello waits for
     // it: the host must never hand work into a session whose leftovers are still being reconciled
     // under the same labels. The Hello claims what was carried.
-    workers.execute(
+    work(
         () -> {
           List<String> carried = ledger.carried();
           try {
@@ -307,7 +308,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
       onLifecycle(lifecycleMessage);
     } else if (domainType.isInstance(message)) {
       D frame = domainType.cast(message);
-      workers.execute(
+      work(
           () -> {
             try {
               domain.onMessage(frame, session);
@@ -344,7 +345,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
           decommission("the host deleted this runner (" + retire.reason() + ")");
       case Retire retire -> {
         if (lifecycle.retire(retire)) {
-          workers.execute(this::leave);
+          work(this::leave);
         }
       }
       case Quarantined quarantine -> {
@@ -404,7 +405,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     carriedDropped.whenComplete(
         (done, failure) -> {
           reserveIf(ledger.onAck(ackedSlots));
-          workers.execute(
+          work(
               () -> {
                 try {
                   domain.onAck(ack, session);
@@ -472,7 +473,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     if (s != null) {
       s.stop();
     }
-    workers.execute(
+    work(
         () -> {
           try {
             domain.onDecommission(session);
@@ -497,7 +498,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     ledger.suspend();
     lifecycle.poke();
     if (!decommissioning.get()) {
-      workers.execute(
+      work(
           () -> {
             try {
               domain.onSessionLost();
@@ -505,6 +506,19 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
               LOG.debugf("%s's domain failed on the lost session: %s", who, e.getMessage());
             }
           });
+    }
+  }
+
+  /**
+   * Submit to {@link #workers}, dropping the job rather than throwing when the pool is already
+   * shut down: a socket close or a late frame can land on the event loop after {@link #run}'s
+   * {@code finally} has stopped it, and a stopping runner has nothing left to do with it.
+   */
+  private void work(Runnable job) {
+    try {
+      workers.execute(job);
+    } catch (RejectedExecutionException e) {
+      LOG.debugf("%s dropped work after stopping", who);
     }
   }
 

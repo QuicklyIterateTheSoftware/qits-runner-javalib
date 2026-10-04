@@ -290,6 +290,21 @@ class RunnerRuntimeTest {
         "the domain drops before it hears the Ack: " + events);
   }
 
+  /**
+   * A socket close can arrive on the event loop after {@code run()}'s {@code finally} has shut
+   * {@code workers} down — the race this toolkit must not let reach the loop as an exception.
+   */
+  @Test
+  void aSocketCloseThatArrivesAfterTheRuntimeStoppedRaisesNothing() throws Exception {
+    ackWith(1, 0);
+    start("t", 10_000);
+    host.await(Hello.class);
+    runner.stop(RunnerExit.OK);
+    exit.get(10, TimeUnit.SECONDS);
+    runner.onClosed();
+    runner = null;
+  }
+
   @Test
   void aCarriedItemTheHostAdoptsKeepsItsSlotAndIsNotDropped() throws Exception {
     host.script =

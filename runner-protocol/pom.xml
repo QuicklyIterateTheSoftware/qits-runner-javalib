@@ -19,8 +19,8 @@
          Moved from qits-ci-runner-daemon's ci-runner-protocol at 2026.1003.50846 (qits-857), and
          generalised: the lifecycle arms of CiRunnerCodec, its reader helpers (WireMaps) and
          CiRunnerBinary.readVersion, renamed. The CI-specific fields (Capabilities.idRange,
-         Ack.registryMirrors, heldRuns/adoptedRuns) move to the domain side via RunnerVocabulary and
-         DomainCodec.helloExtensions/capabilities. -->
+         Ack.registryMirrors, heldRuns/adoptedRuns) move to the runner's side: the two lists are
+         named by its RunnerVocabulary, the rest travel in the frames' ordered extensions. -->
     <artifactId>qits-runner-protocol</artifactId>
     <name>qits-runner :: runner-protocol</name>
 
@@ -30,9 +30,40 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- TEST SCOPE ONLY, and pinned to the release the base was moved from: CiWireCompatibilityTest
+             encodes every lifecycle frame through CI's own codec and through RunnerCodec and demands
+             the same ordered map. It is qits-772's precondition (moving qits-ci-runner-daemon onto
+             this jar must not change one byte on the wire), so this pin moves only together with a
+             deliberate re-check of that test, never by a dependencies bump. -->
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-ci-runner-protocol</artifactId>
+            <version>2026.1003.50846</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
+        <!-- FILTERING IS ON FOR ONE TEST RESOURCE AND NOTHING ELSE: RunnerBinaryVersionTest reads a
+             ${project.version}-filtered file, exactly as an embedder's protocol jar does, and its
+             unfiltered twin to prove the refusal. The include/exclude pair keeps the literal one
+             literal. -->
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>eu/wohlben/qits/runner/protocol/filtered-binary.properties</include>
+                </includes>
+            </testResource>
+            <testResource>
+                <directory>src/test/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>eu/wohlben/qits/runner/protocol/filtered-binary.properties</exclude>
+                </excludes>
+            </testResource>
+        </testResources>
         <plugins>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>

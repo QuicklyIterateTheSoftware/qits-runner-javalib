@@ -282,6 +282,9 @@ class RunnerRuntimeTest {
     assertEquals(List.of("item-a"), host.all(Hello.class).get(1).held(), "the Hello claims it");
     awaitHeld(0);
     awaitTrue(() -> domain.dropped.contains(List.of("item-a")));
+    // The second session's Ack reaches the domain on a job of its own, after the drop: wait for
+    // it, rather than read the events while it may still be on its way.
+    awaitTrue(() -> List.copyOf(domain.events).stream().filter("ack2"::equals).count() == 2);
     List<String> events = List.copyOf(domain.events);
     assertTrue(events.contains("sessionLost"), events::toString);
     assertTrue(events.contains("sessionStart[item-a]"), events::toString);
@@ -1184,6 +1187,31 @@ class RunnerRuntimeTest {
     int after = seen.size();
     Thread.sleep(500);
     assertEquals(after, seen.size(), "housekeeping stops on decommission");
+  }
+
+  @Test
+  void aStoppedRunnerLetsItsDockerCallInFlightFinishSoNothingWritesAfterItReturns()
+      throws Exception {
+    // The first housekeeping pass's prune hangs a second, then falls through to the fake's state
+    // model, which (re)creates its state directory: the write that outlived a test on a slow host.
+    docker.hang("image-prune", 1);
+    ackWith(1, 0);
+    start("t", 10_000);
+    awaitTrue(() -> docker.calls("image").stream().anyMatch(c -> c.contains("prune")));
+
+    runner.stop(RunnerExit.OK);
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    Path fakeState = docker.dir().resolve("state");
+    try (var paths = Files.walk(fakeState)) {
+      for (Path p : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+        Files.delete(p);
+      }
+    }
+    Thread.sleep(1_500);
+    assertFalse(
+        Files.exists(fakeState),
+        "the prune finished before the run returned, not after: nothing is left to write");
   }
 
   private static void awaitTrue(BooleanSupplier condition) throws InterruptedException {

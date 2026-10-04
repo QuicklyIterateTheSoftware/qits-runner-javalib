@@ -8,9 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -75,7 +74,7 @@ public final class SelfUpdate {
   private final RunnerImages runnerImages;
   private final String who;
   private final AtomicBoolean predecessorsSwept = new AtomicBoolean();
-  private final ScheduledExecutorService executor;
+  private final ScheduledThreadPoolExecutor executor;
 
   // Guarded by `this`.
   private Upgrade target;
@@ -104,12 +103,15 @@ public final class SelfUpdate {
     this.runnerImages = runnerImages;
     this.who = identity.logName();
     this.executor =
-        Executors.newSingleThreadScheduledExecutor(
+        new ScheduledThreadPoolExecutor(
+            1,
             runnable -> {
               Thread thread = new Thread(runnable, who + "-self-update");
               thread.setDaemon(true);
               return thread;
             });
+    // A shutdown drops every retry, recheck and watch not yet due.
+    this.executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
   }
 
   /**
@@ -260,8 +262,23 @@ public final class SelfUpdate {
     }
   }
 
-  /** Stop the self-update thread. */
+  /**
+   * Stop the self-update thread: no attempt, retry or watch starts after this, and an attempt in
+   * flight starts no successor. Never an interrupt — an interrupted docker call returns while the
+   * docker process it forked runs on, unwatched — so the call in flight finishes under its deadline
+   * and {@link #awaitTermination} is how the runtime knows the thread is done.
+   */
   public void shutdown() {
+    executor.shutdown();
+  }
+
+  /** Wait up to {@code nanos} for the attempt in flight to finish; true when the thread is done. */
+  boolean awaitTermination(long nanos) throws InterruptedException {
+    return executor.awaitTermination(nanos, TimeUnit.NANOSECONDS);
+  }
+
+  /** The last resort, past the wait: interrupt the attempt, whatever it is waiting on. */
+  void shutdownNow() {
     executor.shutdownNow();
   }
 
@@ -313,6 +330,10 @@ public final class SelfUpdate {
         pulled = true;
       }
       LOG.infof("%s pulled %s", who, upgrade.image());
+    }
+    if (executor.isShutdown()) {
+      // Halted, or the process is ending, while the pull ran: no successor from here on.
+      return;
     }
     if (!quiescent()) {
       // A freed slot and a closed socket both poke; the poll is for a domain whose quiescence
@@ -436,6 +457,9 @@ public final class SelfUpdate {
       return Optional.of("could not derive its successor's parameters: " + e.getMessage());
     }
     String name = LifecycleArgv.containerName(identity, runnerId, upgrade.version());
+    if (executor.isShutdown()) {
+      return Optional.empty();
+    }
     synchronized (this) {
       // Recorded before the run, not after: the successor can say Hello — and the host send this
       // process Retire — before `docker run -d` has even returned here.

@@ -37,7 +37,8 @@ interface NodeLifecycle {
 
   /**
    * The runner learned it was deleted: stop the self-update and the housekeeping at once, on the
-   * loop, before the domain is asked to stop its work — neither may start anything after this.
+   * loop, before the domain is asked to stop its work — neither may start anything after this. A
+   * docker call already in flight is not interrupted; it finishes under its deadline.
    */
   void halt();
 
@@ -47,8 +48,18 @@ interface NodeLifecycle {
    */
   void decommission(RunnerSession session);
 
-  /** The process is ending: stop whatever this seam scheduled. */
+  /**
+   * The process is ending: stop whatever this seam scheduled. Starts nothing more and interrupts
+   * nothing — a docker call in flight finishes under its deadline; {@link #awaitTermination} waits
+   * for it.
+   */
   void shutdown();
+
+  /** After {@link #shutdown}: wait up to {@code nanos} for this seam's threads; true when done. */
+  boolean awaitTermination(long nanos) throws InterruptedException;
+
+  /** The last resort, past the wait: interrupt this seam's threads. */
+  void shutdownNow();
 
   /** The node lifecycle on the runner's own docker. */
   static NodeLifecycle onDocker(
@@ -133,6 +144,19 @@ interface NodeLifecycle {
       @Override
       public void shutdown() {
         halt();
+      }
+
+      @Override
+      public boolean awaitTermination(long nanos) throws InterruptedException {
+        long deadline = System.nanoTime() + nanos;
+        return selfUpdate.awaitTermination(nanos)
+            && housekeeping.awaitTermination(deadline - System.nanoTime());
+      }
+
+      @Override
+      public void shutdownNow() {
+        selfUpdate.shutdownNow();
+        housekeeping.shutdownNow();
       }
     };
   }

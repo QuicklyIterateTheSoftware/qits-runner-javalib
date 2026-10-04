@@ -25,6 +25,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jboss.logging.Logger;
 
@@ -60,6 +61,9 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   /** How long an exiting runner waits for its last log lines to be shipped. */
   static final long TELEMETRY_LAST_WORDS_MILLIS = 3_000;
 
+  /** How long an exiting runner waits for its threads once it has had to interrupt them. */
+  static final long INTERRUPTED_THREADS_MILLIS = 5_000;
+
   private final Vertx vertx;
   private final RunnerIdentity identity;
   private final RunnerSettings settings;
@@ -83,6 +87,14 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   private final ExecutorService workers;
 
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
+
+  /**
+   * Set by {@link #run}'s exit, under its own lock: from then on the heartbeat file is not touched
+   * again, so a runner that has returned writes nothing more to its state directory.
+   */
+  private final Object stateDirLock = new Object();
+
+  private boolean stopped;
   private volatile ControlSocket<D> socket;
   private volatile Bearer bearer;
 
@@ -241,14 +253,53 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
       LOG.error(who + " ended abnormally", e);
       return RunnerExit.STATE_UNUSABLE;
     } finally {
+      synchronized (stateDirLock) {
+        stopped = true;
+      }
       ControlSocket<D> s = socket;
       if (s != null) {
         s.stop();
       }
-      lifecycle.shutdown();
-      workers.shutdownNow();
+      quiesce();
       telemetry.stop(TELEMETRY_LAST_WORDS_MILLIS);
       http.close();
+    }
+  }
+
+  /**
+   * Stop every thread this runtime started and wait for them, so {@link #run} returns — and a
+   * suite deletes the state directory — only once nothing of this runner is still at work on the
+   * node. Nothing is interrupted at first: an interrupted docker call returns at once while the
+   * docker process it forked runs on, unwatched, still writing wherever it writes. So the work in
+   * flight is let finish, up to one docker deadline — no single docker call runs longer — and only
+   * a thread still busy past that is interrupted, as the last resort it is.
+   */
+  private void quiesce() {
+    lifecycle.shutdown();
+    workers.shutdown();
+    long deadline =
+        System.nanoTime() + TimeUnit.SECONDS.toNanos(settings.dockerTimeoutSeconds());
+    try {
+      boolean done =
+          lifecycle.awaitTermination(deadline - System.nanoTime())
+              && workers.awaitTermination(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+      if (done) {
+        return;
+      }
+      LOG.warnf(
+          "%s's work was still running %ds after it stopped; interrupting it",
+          who, settings.dockerTimeoutSeconds());
+      lifecycle.shutdownNow();
+      workers.shutdownNow();
+      long last = TimeUnit.MILLISECONDS.toNanos(INTERRUPTED_THREADS_MILLIS);
+      if (!lifecycle.awaitTermination(last)
+          || !workers.awaitTermination(last, TimeUnit.NANOSECONDS)) {
+        LOG.warnf("%s exits with work still running", who);
+      }
+    } catch (InterruptedException e) {
+      lifecycle.shutdownNow();
+      workers.shutdownNow();
+      Thread.currentThread().interrupt();
     }
   }
 
@@ -444,10 +495,16 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
    * state directory says so on its next registration or rollover, not here, every 10 s.
    */
   private void beat() {
-    try {
-      Heartbeat.touch(settings.stateDir());
-    } catch (java.io.IOException | RuntimeException e) {
-      LOG.debugf("%s could not touch its heartbeat file: %s", who, e.getMessage());
+    synchronized (stateDirLock) {
+      if (stopped) {
+        // A heartbeat that was in flight when the run ended: the runner has stopped.
+        return;
+      }
+      try {
+        Heartbeat.touch(settings.stateDir());
+      } catch (java.io.IOException | RuntimeException e) {
+        LOG.debugf("%s could not touch its heartbeat file: %s", who, e.getMessage());
+      }
     }
   }
 

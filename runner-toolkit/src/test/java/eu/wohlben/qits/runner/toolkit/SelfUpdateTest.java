@@ -112,6 +112,36 @@ class SelfUpdateTest {
     assertTrue(failure.get().contains("[redacted]"), failure::get);
   }
 
+  /**
+   * A cold pull routinely outlives the general {@code DOCKER_TIMEOUT} without docker itself being
+   * stuck: {@link RegistryLogin#pull}, which this self-update's pull runs under, uses {@link
+   * RunnerDocker#pullDeadline()} rather than the docker's general one.
+   */
+  @Test
+  void aColdPullLongerThanTheGeneralDeadlineStillSucceedsUnderThePullDeadline(@TempDir Path dir)
+      throws Exception {
+    FakeDocker fake = new FakeDocker(dir).hang("pull", 2);
+    RunnerDocker docker =
+        new RunnerDocker(
+            Toy.IDENTITY, fake.binary(), Duration.ofSeconds(1), Duration.ofSeconds(10));
+    SelfUpdate selfUpdate =
+        new SelfUpdate(
+            Toy.IDENTITY,
+            docker,
+            "r1",
+            Optional.empty(),
+            FAST,
+            new RegistryLogin(Toy.IDENTITY, docker, () -> CLIENT),
+            () -> true,
+            new RunnerImages(Toy.IDENTITY, docker, Optional.empty()));
+
+    Optional<String> failure =
+        selfUpdate.pull(
+            new Upgrade("2026.1.2", "registry.example:5000/qits/qits-toy-runner:2026.1.2", null));
+
+    assertTrue(failure.isEmpty(), failure::toString);
+  }
+
   @Test
   void aSupersededRetirementTouchesNothingButItsOwnRestartPolicy(@TempDir Path dir)
       throws Exception {

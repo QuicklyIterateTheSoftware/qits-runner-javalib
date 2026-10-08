@@ -210,11 +210,13 @@ deleted, the restart policy taken away, the helper started, exit 0.
 
 Every variable is `<envPrefix><NAME>`: `URL`, `ID` (both required), `REGISTRATION_TOKEN` (needed
 until there is a `client.json`, and again to rotate it), `STATE_DIR`, `SLOTS`, `DOCKER_BINARY`,
-`DOCKER_TIMEOUT`, `ROLLOVER_TIMEOUT`, `SELF_UPDATE`, `TELEMETRY_URL`; `PRINT_VERSION=1` prints the
-version and exits 0; `DECOMMISSION=<id>` (with `DECOMMISSION_VOLUME` and `DECOMMISSION_TEARDOWN`)
-is helper mode. `<binary> health` exits 0 while the heartbeat file is younger than 60 s and 1
-before the first `Ack`. Exit codes: 0 done, 2 misconfigured, 3 registration unreachable, 4
-capability mismatch, 5 registration refused, 6 state unusable.
+`DOCKER_TIMEOUT` (120s default; every docker call but a pull), `PULL_TIMEOUT` (1800s default; a
+pull's own wider budget — a cold pull of a large image routinely outlives `DOCKER_TIMEOUT` without
+docker itself being stuck), `ROLLOVER_TIMEOUT`, `SELF_UPDATE`, `TELEMETRY_URL`; `PRINT_VERSION=1`
+prints the version and exits 0; `DECOMMISSION=<id>` (with `DECOMMISSION_VOLUME` and
+`DECOMMISSION_TEARDOWN`) is helper mode. `<binary> health` exits 0 while the heartbeat file is
+younger than 60 s and 1 before the first `Ack`. Exit codes: 0 done, 2 misconfigured, 3 registration
+unreachable, 4 capability mismatch, 5 registration refused, 6 state unusable.
 
 ## Derived names
 

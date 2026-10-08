@@ -86,6 +86,38 @@ class RunnerDockerTest {
         elapsedMillis < 15_000, () -> "the deadline did not bound the call: " + elapsedMillis);
   }
 
+  /**
+   * A pull that outlives the general {@code DOCKER_TIMEOUT} is routine, not a hang — it runs under
+   * the wider {@link RunnerDocker#pullDeadline()} instead, which {@link RegistryLogin#pull} (and so
+   * a self-update's pull) passes to {@link RunnerDocker#run(List, java.time.Duration)} explicitly.
+   */
+  @Test
+  void aPullRunsUnderItsOwnWiderDeadlineAndOutlivesTheGeneralOne() throws Exception {
+    FakeDocker fake = new FakeDocker(dir).hang("pull", 2);
+    RunnerDocker docker =
+        new RunnerDocker(
+            Toy.IDENTITY, fake.binary(), Duration.ofSeconds(1), Duration.ofSeconds(10));
+
+    RunnerDocker.Result result =
+        docker.run(List.of(fake.binary(), "pull", "big:1"), docker.pullDeadline());
+
+    assertTrue(result.ok(), result::detail);
+  }
+
+  /** The same call, past the general deadline alone: a pull is the one call with a wider budget. */
+  @Test
+  void aNonPullCallStillTimesOutAtTheGeneralDeadlineDespiteAWiderPullDeadline() throws Exception {
+    FakeDocker fake = new FakeDocker(dir).hang("ps", 2);
+    RunnerDocker docker =
+        new RunnerDocker(
+            Toy.IDENTITY, fake.binary(), Duration.ofSeconds(1), Duration.ofSeconds(10));
+
+    RunnerDocker.Result result = docker.run(List.of(fake.binary(), "ps"));
+
+    assertTrue(result.timedOut());
+    assertTrue(result.detail().contains("did not answer within 1s"), result::detail);
+  }
+
   @Test
   void aMissingBinaryIsAnAnswerRatherThanAnException() throws Exception {
     RunnerDocker.Result result =

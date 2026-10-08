@@ -79,6 +79,10 @@ class RunnerSettingsTest {
         invalid("URL", "https://toy.example", "ID", "r1", "DOCKER_TIMEOUT", "soon")
             .getMessage()
             .startsWith("QITS_TOY_RUNNER_DOCKER_TIMEOUT"));
+    assertTrue(
+        invalid("URL", "https://toy.example", "ID", "r1", "PULL_TIMEOUT", "soon")
+            .getMessage()
+            .startsWith("QITS_TOY_RUNNER_PULL_TIMEOUT"));
   }
 
   @Test
@@ -90,6 +94,7 @@ class RunnerSettingsTest {
     assertEquals(1, settings.slots());
     assertEquals("docker", settings.dockerBinary());
     assertEquals(120, settings.dockerTimeoutSeconds());
+    assertEquals(1800, settings.pullTimeoutSeconds());
     assertEquals(180, settings.rolloverTimeoutSeconds());
     assertTrue(settings.selfUpdate());
     assertEquals(RunnerSettings.Timing.defaults(), settings.timing());
@@ -112,6 +117,21 @@ class RunnerSettingsTest {
         45,
         parse("URL", "http://dev-qits-toy:8080", "ID", "r1", "SLOTS", "3", "DOCKER_TIMEOUT", "45s")
             .dockerTimeoutSeconds());
+  }
+
+  @Test
+  void aPullTimeoutDefaultsWiderThanTheDockerTimeoutAndMayCarryItsUnit() throws Exception {
+    assertEquals(
+        RunnerSettings.DEFAULT_PULL_TIMEOUT_SECONDS,
+        parse("URL", "https://toy.example", "ID", "r1").pullTimeoutSeconds(),
+        "a cold pull needs a wider budget than a daemon round trip");
+    assertEquals(
+        1800,
+        parse("URL", "https://toy.example", "ID", "r1", "PULL_TIMEOUT", "1800s")
+            .pullTimeoutSeconds());
+    assertEquals(
+        1800,
+        parse("URL", "https://toy.example", "ID", "r1", "PULL_TIMEOUT", "1800").pullTimeoutSeconds());
   }
 
   @Test
@@ -207,6 +227,7 @@ class RunnerSettingsTest {
             "QITS_TOY_RUNNER_DOCKER_BINARY",
             "QITS_TOY_RUNNER_SLOTS",
             "QITS_TOY_RUNNER_DOCKER_TIMEOUT",
+            "QITS_TOY_RUNNER_PULL_TIMEOUT",
             "QITS_TOY_RUNNER_ROLLOVER_TIMEOUT",
             "QITS_TOY_RUNNER_SELF_UPDATE",
             "QITS_TOY_RUNNER_TELEMETRY_URL"),

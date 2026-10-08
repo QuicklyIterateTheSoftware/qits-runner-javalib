@@ -297,7 +297,10 @@ class InstallScriptContractTest {
     assertTrue(
         run.stream()
             .noneMatch(
-                a -> a.contains(PREFIX + "ROLLOVER_TIMEOUT") || a.contains(PREFIX + "DOCKER_TIMEOUT")),
+                a ->
+                    a.contains(PREFIX + "ROLLOVER_TIMEOUT")
+                        || a.contains(PREFIX + "DOCKER_TIMEOUT")
+                        || a.contains(PREFIX + "PULL_TIMEOUT")),
         "a tuning variable that was not set reached the container");
     assertFalse(ran.output().contains(newToken), "the new token appeared in the output");
     assertTrue(

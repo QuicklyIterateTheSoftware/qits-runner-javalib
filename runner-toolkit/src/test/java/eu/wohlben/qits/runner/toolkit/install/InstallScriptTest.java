@@ -64,6 +64,7 @@ class InstallScriptTest {
     assertTrue(
         script.contains(
             "for tuning in QITS_WORKSPACES_RUNNER_DOCKER_TIMEOUT"
+                + " QITS_WORKSPACES_RUNNER_PULL_TIMEOUT"
                 + " QITS_WORKSPACES_RUNNER_ROLLOVER_TIMEOUT; do"),
         script);
     assertTrue(
@@ -79,11 +80,12 @@ class InstallScriptTest {
     // Everything runs from the last line, so a download cut short runs nothing.
     assertTrue(script.endsWith("\nmain \"$@\"\n"), script);
 
-    // A page's own tuning follows the two every runner reads.
+    // A page's own tuning follows the three every runner reads.
     assertTrue(
         InstallScript.script(HARNESS, HARNESS_PAGE, REGISTRY)
             .contains(
-                "for tuning in QITS_HARNESS_RUNNER_DOCKER_TIMEOUT QITS_HARNESS_RUNNER_ROLLOVER_TIMEOUT"
+                "for tuning in QITS_HARNESS_RUNNER_DOCKER_TIMEOUT QITS_HARNESS_RUNNER_PULL_TIMEOUT"
+                    + " QITS_HARNESS_RUNNER_ROLLOVER_TIMEOUT"
                     + " QITS_HARNESS_RUNNER_BUILDKIT_HTTP_REGISTRIES; do"));
   }
 

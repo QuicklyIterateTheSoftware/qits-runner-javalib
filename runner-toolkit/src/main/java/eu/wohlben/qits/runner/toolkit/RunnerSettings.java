@@ -30,6 +30,7 @@ public record RunnerSettings(
     int slots,
     String dockerBinary,
     long dockerTimeoutSeconds,
+    long pullTimeoutSeconds,
     long rolloverTimeoutSeconds,
     boolean selfUpdate,
     String telemetryUrl,
@@ -44,6 +45,15 @@ public record RunnerSettings(
   public static final String SLOTS = "SLOTS";
   public static final String DOCKER_BINARY = "DOCKER_BINARY";
   public static final String DOCKER_TIMEOUT = "DOCKER_TIMEOUT";
+
+  /**
+   * A pull's own deadline, wider than {@link #DOCKER_TIMEOUT}: a cold pull of a large image (layers
+   * fetched and decompressed, not just a daemon round trip) can run well past the general call's
+   * budget without docker itself being stuck, and {@link #DOCKER_TIMEOUT} still bounds every other
+   * call — including the digest check right after a pull.
+   */
+  public static final String PULL_TIMEOUT = "PULL_TIMEOUT";
+
   public static final String ROLLOVER_TIMEOUT = "ROLLOVER_TIMEOUT";
 
   /**
@@ -67,6 +77,14 @@ public record RunnerSettings(
 
   /** A docker call's deadline when the operator set none. */
   public static final int DEFAULT_DOCKER_TIMEOUT_SECONDS = 120;
+
+  /**
+   * A pull's deadline when the operator set none. Half an hour, not two minutes: a cold pull of a
+   * multi-gigabyte image over a slow or congested link is routine, not a hang, and a budget sized
+   * for a daemon round trip ({@link #DEFAULT_DOCKER_TIMEOUT_SECONDS}) kills it mid-download every
+   * time.
+   */
+  public static final int DEFAULT_PULL_TIMEOUT_SECONDS = 1800;
 
   /**
    * How long a successor has to take over before it is removed. Three minutes is a pull-free
@@ -122,7 +140,7 @@ public record RunnerSettings(
   public RunnerSettings withTiming(Timing timing) {
     return new RunnerSettings(
         url, runnerId, registrationToken, stateDir, slots, dockerBinary, dockerTimeoutSeconds,
-        rolloverTimeoutSeconds, selfUpdate, telemetryUrl, timing);
+        pullTimeoutSeconds, rolloverTimeoutSeconds, selfUpdate, telemetryUrl, timing);
   }
 
   /**
@@ -163,6 +181,10 @@ public record RunnerSettings(
             identity.env(DOCKER_TIMEOUT),
             stripSeconds(env.apply(identity.env(DOCKER_TIMEOUT))),
             DEFAULT_DOCKER_TIMEOUT_SECONDS),
+        positive(
+            identity.env(PULL_TIMEOUT),
+            stripSeconds(env.apply(identity.env(PULL_TIMEOUT))),
+            DEFAULT_PULL_TIMEOUT_SECONDS),
         positive(
             identity.env(ROLLOVER_TIMEOUT),
             stripSeconds(env.apply(identity.env(ROLLOVER_TIMEOUT))),

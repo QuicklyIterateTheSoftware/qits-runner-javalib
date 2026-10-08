@@ -44,7 +44,9 @@ public final class RegistryLogin {
   }
 
   /**
-   * Pull {@code image} under the runner's own login. Answers empty when it is here now, else the
+   * Pull {@code image} under the runner's own login, under {@link RunnerDocker#pullDeadline()}
+   * rather than the docker's general deadline — a cold pull of a large image routinely outlives
+   * the latter without docker itself being stuck. Answers empty when it is here now, else the
    * failure's detail with the secret redacted.
    */
   public Optional<String> pull(String image) {
@@ -75,7 +77,8 @@ public final class RegistryLogin {
         return Optional.of(
             "could not stage its registry login: " + staging.getClass().getSimpleName());
       }
-      RunnerDocker.Result pulled = docker.run(LifecycleArgv.pull(docker.binary(), configDir, image));
+      RunnerDocker.Result pulled =
+          docker.run(LifecycleArgv.pull(docker.binary(), configDir, image), docker.pullDeadline());
       if (!pulled.ok()) {
         return Optional.of(
             "docker pull "

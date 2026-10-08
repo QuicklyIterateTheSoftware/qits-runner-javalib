@@ -94,7 +94,10 @@ public final class InstallScript {
 
   /** The tuning every runner reads, ahead of a page's own. */
   private static final List<String> BASE_TUNING =
-      List.of(RunnerSettings.DOCKER_TIMEOUT, RunnerSettings.ROLLOVER_TIMEOUT);
+      List.of(
+          RunnerSettings.DOCKER_TIMEOUT,
+          RunnerSettings.PULL_TIMEOUT,
+          RunnerSettings.ROLLOVER_TIMEOUT);
 
   private static final String TEXT = load();
 
@@ -103,7 +106,8 @@ public final class InstallScript {
   /**
    * Where a runner's install line comes from, as the script names it to a person, and the tuning
    * variables (without the identity's prefix) an operator may add to the line beyond {@code
-   * DOCKER_TIMEOUT} and {@code ROLLOVER_TIMEOUT} — qits-ci's would be the {@code BUILDKIT_*} ones.
+   * DOCKER_TIMEOUT}, {@code PULL_TIMEOUT} and {@code ROLLOVER_TIMEOUT} — qits-ci's would be the
+   * {@code BUILDKIT_*} ones.
    *
    * @param name e.g. {@code the Workspaces UI's Runners page}
    * @param tuning e.g. {@code BUILDKIT_HTTP_REGISTRIES}; may be empty

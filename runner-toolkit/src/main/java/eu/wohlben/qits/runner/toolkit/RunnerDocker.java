@@ -52,15 +52,35 @@ public final class RunnerDocker {
 
   private final String binary;
   private final Duration deadline;
+  private final Duration pullDeadline;
   private final ContainersDriver driver;
 
   /**
    * @param binary the docker CLI — {@code <envPrefix>DOCKER_BINARY}
-   * @param deadline every call's — {@code <envPrefix>DOCKER_TIMEOUT}
+   * @param deadline every call's, {@link #run(List)} included — {@code <envPrefix>DOCKER_TIMEOUT}
+   *     — except a pull, which runs under {@link #pullDeadline()} instead; this constructor has
+   *     no settings to read that from, so it defaults to {@link
+   *     RunnerSettings#DEFAULT_PULL_TIMEOUT_SECONDS}. A caller that already parsed one should use
+   *     {@link #of} instead, which reads both from the same {@link RunnerSettings}.
    */
   public RunnerDocker(RunnerIdentity identity, String binary, Duration deadline) {
+    this(
+        identity,
+        binary,
+        deadline,
+        Duration.ofSeconds(RunnerSettings.DEFAULT_PULL_TIMEOUT_SECONDS));
+  }
+
+  /**
+   * @param binary the docker CLI — {@code <envPrefix>DOCKER_BINARY}
+   * @param deadline every call's except a pull — {@code <envPrefix>DOCKER_TIMEOUT}
+   * @param pullDeadline a pull's own, wider budget — {@code <envPrefix>PULL_TIMEOUT}
+   */
+  public RunnerDocker(
+      RunnerIdentity identity, String binary, Duration deadline, Duration pullDeadline) {
     this.binary = binary;
     this.deadline = deadline;
+    this.pullDeadline = pullDeadline;
     this.driver =
         new DockerContainersDriver(
             binary,
@@ -68,10 +88,13 @@ public final class RunnerDocker {
             new DockerSocketGroup(Optional.empty())::value);
   }
 
-  /** The runner's docker, from its settings. */
+  /** The runner's docker, from its settings: {@code DOCKER_TIMEOUT} and {@code PULL_TIMEOUT}. */
   public static RunnerDocker of(RunnerIdentity identity, RunnerSettings settings) {
     return new RunnerDocker(
-        identity, settings.dockerBinary(), Duration.ofSeconds(settings.dockerTimeoutSeconds()));
+        identity,
+        settings.dockerBinary(),
+        Duration.ofSeconds(settings.dockerTimeoutSeconds()),
+        Duration.ofSeconds(settings.pullTimeoutSeconds()));
   }
 
   /** The docker binary every argv begins with. */
@@ -79,9 +102,19 @@ public final class RunnerDocker {
     return binary;
   }
 
-  /** The deadline every call is made under; the driver's methods take it explicitly. */
+  /** The deadline every call but a pull is made under; the driver's methods take it explicitly. */
   public Duration deadline() {
     return deadline;
+  }
+
+  /**
+   * The deadline a pull is made under instead of {@link #deadline()} — wider, because a cold pull
+   * of a large image routinely outlives a daemon round trip's budget. {@link RegistryLogin#pull}
+   * runs under it, and so does a self-update's pull ({@code SelfUpdate.pull}, through the same
+   * {@link RegistryLogin}).
+   */
+  public Duration pullDeadline() {
+    return pullDeadline;
   }
 
   /** The runner-namespaced qits-containers driver. */
@@ -89,12 +122,18 @@ public final class RunnerDocker {
     return driver;
   }
 
+  /** Run one lifecycle argv under {@link #deadline()}, stdout and stderr apart. */
+  public Result run(List<String> argv) {
+    return run(argv, deadline);
+  }
+
   /**
-   * Run one lifecycle argv under the deadline, stdout and stderr apart. A spawn failure (no docker
-   * binary) is exit {@code -1} with the reason as stderr, so a caller only ever branches on {@link
+   * Run one lifecycle argv under {@code deadline} rather than {@link #deadline()} — a pull, under
+   * {@link #pullDeadline()}. Stdout and stderr stay apart. A spawn failure (no docker binary) is
+   * exit {@code -1} with the reason as stderr, so a caller only ever branches on {@link
    * Result#ok()}.
    */
-  public Result run(List<String> argv) {
+  public Result run(List<String> argv, Duration deadline) {
     ContainerProcess.Separated answered =
         ContainerProcess.runSeparate(argv, deadline, ContainerProcess.STDOUT_CAP);
     if (answered.timedOut()) {

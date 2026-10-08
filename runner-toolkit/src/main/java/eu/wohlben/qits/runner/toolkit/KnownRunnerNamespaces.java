@@ -11,7 +11,7 @@ import java.util.List;
  * environment.
  *
  * <p><b>A new runner kind joins this list in the same commit that introduces it</b> — qits-767's
- * {@code projects-desk} is next. A kind missing here is a kind nobody checked against its
+ * {@code projects-desk} joined. A kind missing here is a kind nobody checked against its
  * neighbours.
  *
  * <p>Roots, not identities: an identity also carries a version and a vocabulary, which belong to
@@ -50,12 +50,20 @@ public final class KnownRunnerNamespaces {
           "qits.workspaces.runner",
           "qits-workspaces-runner");
 
+  /** qits-projects-desk-runner-daemon's (qits-767). */
+  public static final Root PROJECTS_DESK =
+      new Root(
+          "projects-desk",
+          "QITS_PROJECTS_DESK_RUNNER_",
+          "qits.projects.desk.runner",
+          "qits-projects-desk-runner");
+
   /** The harness runner this repository proves the toolkit with (qits-869). Never published. */
   public static final Root HARNESS =
       new Root("harness", "QITS_HARNESS_RUNNER_", "qits.harness.runner", "qits-harness-runner");
 
   /** Every kind on the estate. */
-  public static final List<Root> ALL = List.of(CI, WORKSPACES, HARNESS);
+  public static final List<Root> ALL = List.of(CI, WORKSPACES, PROJECTS_DESK, HARNESS);
 
   private KnownRunnerNamespaces() {}
 }

@@ -1,8 +1,8 @@
 # qits-runner-javalib
 
 The platform's **pull-based runner scaffolding as a library**: what every runner that installs
-itself on an outside host — a workspaces runner, a front-desk runner, later the CI runner — needs in
-common, written once rather than copied per kind.
+itself on an outside host — a workspaces runner, `qits-projects-desk-runner-daemon` (qits-767),
+later the CI runner — needs in common, written once rather than copied per kind.
 
 - **`eu.wohlben.qits:qits-runner-protocol`** — the runner lifecycle frames (`hello`, `ack`,
   `heartbeat`, `backlog`, `reserve`, `nothing`, `upgrade`, `retire`, `quarantined`, `reinstated`)
@@ -79,7 +79,7 @@ state machine, entity, migrations. Each service keeps its own.
 ### The worked example: the harness runner
 
 `runner-harness/src/main/java/eu/wohlben/qits/runner/harness/` is a whole runner in five classes,
-and exactly the shape a workspaces or front-desk runner fills in.
+and exactly the shape a workspaces runner or `qits-projects-desk-runner-daemon` fills in.
 
 **1. The identity** (`HarnessIdentity`). In a real runner these are constants in its own protocol
 jar, so the daemon and its server build the same value:

@@ -216,10 +216,26 @@ class RunnerIdentityTest {
     assertTrue(KnownRunnerNamespaces.WORKSPACES.matches(ws));
   }
 
+  /**
+   * qits-1098: the roots qits-projects-desk-runner-daemon (qits-767) declares itself with are
+   * listed here, and a {@link RunnerIdentity} built from them is accepted by the same belts as any
+   * other runner's.
+   */
+  @Test
+  void theProjectsDeskRootsAreInAllAndBuildAnAcceptedIdentity() {
+    assertTrue(
+        KnownRunnerNamespaces.ALL.contains(KnownRunnerNamespaces.PROJECTS_DESK),
+        "PROJECTS_DESK must be listed in ALL");
+    KnownRunnerNamespaces.Root desk = KnownRunnerNamespaces.PROJECTS_DESK;
+    RunnerIdentity deskIdentity =
+        identity(desk.kind(), desk.envPrefix(), desk.labelRoot(), desk.namePrefix());
+    assertTrue(desk.matches(deskIdentity), "the projects-desk-shaped identity has PROJECTS_DESK's roots");
+  }
+
   @Test
   void noKnownNamespaceIsAPrefixOfAnother() {
     List<KnownRunnerNamespaces.Root> roots = KnownRunnerNamespaces.ALL;
-    assertTrue(roots.size() >= 3, "ci, workspaces and harness at least");
+    assertTrue(roots.size() >= 4, "ci, workspaces, projects-desk and harness at least");
     List<String> overlaps = new ArrayList<>();
     for (KnownRunnerNamespaces.Root a : roots) {
       // Each is a root an identity accepts: none is a tenant's, none is outside the grammar.

@@ -44,7 +44,7 @@
 
         <!-- qits-containers-driver (qits-623), pinned to a released calver and moved only by the
              maintenance dependencies bump — never by hand. -->
-        <qits.containers-driver.version>2026.1004.204507</qits.containers-driver.version>
+        <qits.containers-driver.version>2026.1009.100140</qits.containers-driver.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain
              developer build resolves off this public default. -->

@@ -218,6 +218,74 @@ prints the version and exits 0; `DECOMMISSION=<id>` (with `DECOMMISSION_VOLUME` 
 younger than 60 s and 1 before the first `Ack`. Exit codes: 0 done, 2 misconfigured, 3 registration
 unreachable, 4 capability mismatch, 5 registration refused, 6 state unusable.
 
+## Health checks
+
+A host asks a runner for a health check and the runner answers with every named check's outcome.
+The machinery is lifted from qits-workspaces-runner-daemon so every runner kind shares it — the CI
+runner included, which is not on `RunnerRuntime` yet. It lives in two packages:
+
+- `eu.wohlben.qits.runner.protocol.health` — `CheckResult(name, ok, detail, data)`,
+  `HealthReport(ok, detail, requestId, checks)` and `HealthWire`: the `Type`/`Field` constants and
+  `encodeCheck(requestId)`, `encodeChecked(report)`, `decodeCheck(map)`, `decodeChecked(map)`. The
+  wire is byte-identical to the workspaces codec's: `type` first, then the fields;
+  `requestId` and `checks` are left off when absent.
+- `eu.wohlben.qits.runner.toolkit.health` — `RunnerHealthCheck` (`name()`, an optional
+  `deadline()`, `run(HealthContext)`), the `HealthChecks` registry, `HealthContext`, `SessionFacts`
+  and `DefaultHealthChecks`.
+
+`HealthChecks` runs every check in registration order, each on its own thread under its own
+deadline (or the registry's default). A check that throws, hangs or answers nothing fails by
+itself, and every other check is still run and reported. Names are unique.
+`HealthChecks.answer(requestId, outcomes)` is ok only when every check is. Its detail reads `all N
+checks passed`, or else `<name>: <detail>` for each failure, joined with `; `.
+
+**The defaults**, each a factory so an embedder puts it where its own wire order needs it:
+
+| Check | Data | Ok when |
+|---|---|---|
+| `DefaultHealthChecks.docker()` | `{serverVersion}` | `docker version` answers a server version |
+| `DefaultHealthChecks.nodeInventory(identity, runnerId, runnerVersion, absent)` | `{containers, volumes, runnerContainer}` | every listing and inspect of the runner's own labelled objects was answered |
+| `DefaultHealthChecks.session()` | `{connected, connectedSince, slots, held}` | connected |
+
+All three are read-only. `absent` is docker's wording for an object that went between the listing
+and its inspect. Pass null for `DefaultHealthChecks::dockerSaysAbsent`.
+`HealthChecks.withDefaults(defaultDeadline, new NodeFacts(identity, runnerId, version))` registers
+the three in that order, for an embedder that has no order of its own to keep. The workspaces
+runner does have one (docker, workspaceImage, selfTest, nodeInventory, login, session,
+workspaceMemory), so it registers each check where it belongs.
+
+**The context.** A check reads `ctx.docker()` (a `DockerCommand`), `ctx.session()` and
+`ctx.lookup(Type.class)`. You build it in one of two ways:
+
+- `HealthContext.of(dockerCommand, factsSupplier, Map.of(Type.class, service, …))`, for any
+  embedder. A docker client that is not a `RunnerDocker` adapts with
+  `DockerCommand.of(binary, deadline, (argv, d) -> …)`.
+- `HealthContext.of(session, runnerDocker, factsSupplier)`, for an embedder on `RunnerRuntime`.
+  `held` then comes from the session's slot ledger, and `lookup(RunnerSession.class)` returns the
+  session.
+
+**Adding a check.** Plainly:
+
+    checks.register(RunnerHealthCheck.named("scratch", null, ctx -> Result.ok("…", Map.of(…))));
+
+In a Quarkus embedder the checks can be ArC beans that the entry point collects:
+
+    @Singleton class ScratchCheck implements RunnerHealthCheck { … }
+
+    @Inject @All List<RunnerHealthCheck> extra;   // in Main
+    checks.registerAll(extra);
+
+ArC resolves `@All` at build time, so the native image needs no reflection for it. The toolkit
+itself stays free of CDI. `runner-harness`'s `HarnessHealthChecksTest` is the worked example.
+
+**`healthCheck`/`healthChecked` stay domain frames.** They are not lifecycle frames, for two
+reasons. qits-projects-desk-runner-daemon already uses both type strings with a different payload.
+And a record shipped here cannot appear in an embedder's sealed `permits` list. So each embedder
+keeps its own thin frame records and has its `DomainCodec` arms delegate to `HealthWire`:
+
+    case HealthChecked m -> HealthWire.encodeChecked(new HealthReport(m.ok(), m.detail(), m.requestId(), m.checks()));
+    case Type.HEALTH_CHECKED -> fromReport(HealthWire.decodeChecked(map));
+
 ## Derived names
 
 For runner id `<id>`, `<id8>` its first eight characters. Nothing else exists: the toolkit lists

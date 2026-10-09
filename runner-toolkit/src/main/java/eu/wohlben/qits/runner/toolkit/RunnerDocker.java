@@ -28,7 +28,7 @@ import java.util.Optional;
  * whole up to 1 MiB, past any document docker answers; a document past the cap is reported as such
  * ({@link Result#stdoutTruncated}) rather than cut silently.
  */
-public final class RunnerDocker {
+public final class RunnerDocker implements DockerCommand {
 
   /**
    * One invocation's outcome. {@code timedOut} is its own flag so a kill is not a mystery exit.
@@ -98,11 +98,13 @@ public final class RunnerDocker {
   }
 
   /** The docker binary every argv begins with. */
+  @Override
   public String binary() {
     return binary;
   }
 
   /** The deadline every call but a pull is made under; the driver's methods take it explicitly. */
+  @Override
   public Duration deadline() {
     return deadline;
   }
@@ -123,6 +125,7 @@ public final class RunnerDocker {
   }
 
   /** Run one lifecycle argv under {@link #deadline()}, stdout and stderr apart. */
+  @Override
   public Result run(List<String> argv) {
     return run(argv, deadline);
   }
@@ -133,6 +136,7 @@ public final class RunnerDocker {
    * exit {@code -1} with the reason as stderr, so a caller only ever branches on {@link
    * Result#ok()}.
    */
+  @Override
   public Result run(List<String> argv, Duration deadline) {
     ContainerProcess.Separated answered =
         ContainerProcess.runSeparate(argv, deadline, ContainerProcess.STDOUT_CAP);

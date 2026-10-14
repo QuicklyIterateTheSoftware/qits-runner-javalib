@@ -100,52 +100,48 @@ public final class OwnResources {
    * went. For CI the keep set is the carried runs; for a workspace runner the server's desired
    * list. Failures are logged, never thrown.
    *
-   * <p>A kept item whose containers cannot be listed keeps the whole pass from removing anything: a
-   * leftover waits for the next reconcile, where a wrong guess would kill live work. Volumes are
-   * never touched — see the class javadoc.
+   * <p><b>One snapshot, decided against whole.</b> Every own container and the work item it
+   * carries come from the very same {@code docker ps} answer — id and {@code
+   * --filter}-independent work-item label read off one line — so a container a concurrent launch
+   * creates for a kept work item after that snapshot was taken is simply absent from it, never a
+   * removal candidate. The earlier shape listed once per kept work id and once more, separately,
+   * for the owner filter alone: a container for a kept work item created in the gap between those
+   * two listings carried a label the first listing could not yet have matched, and the second,
+   * broader listing then read it as outside the keep set — this runner killing its own live work
+   * mid-launch (qits-1233).
+   *
+   * <p>A listing that fails keeps the whole pass from removing anything: a leftover waits for the
+   * next reconcile, where a wrong guess would kill live work. Volumes are never touched — see the
+   * class javadoc.
    */
   public int reconcile(Set<String> keepWorkIds) {
-    Set<String> kept = new HashSet<>();
+    Set<String> keep = new HashSet<>();
     for (String workId : keepWorkIds) {
-      List<String> argv;
       try {
-        argv =
-            List.of(
-                docker.binary(),
-                "ps",
-                "-aq",
-                "--filter",
-                ownerFilter(),
-                "--filter",
-                "label=" + identity.workLabel() + "=" + LifecycleArgv.requireWorkId(workId));
+        keep.add(LifecycleArgv.requireWorkId(workId));
       } catch (IllegalArgumentException notAnId) {
         LOG.warnf("%s ignored a work item it cannot name: %s", who, notAnId.getMessage());
-        continue;
-      }
-      try {
-        kept.addAll(list(argv, "containers of " + workId));
-      } catch (ListingFailed failed) {
-        LOG.warnf("%s; reconciling nothing this time", failed.getMessage());
-        return 0;
       }
     }
-    List<String> own;
+    List<Snapshot> own;
     try {
-      own = containers();
+      own = snapshot();
     } catch (ListingFailed failed) {
       // docker not answering is a restarted host's ordinary state; the next session looks again.
       LOG.warn(failed.getMessage());
       return 0;
     }
     int removed = 0;
-    for (String id : own) {
-      if (kept.contains(id)) {
+    int kept = 0;
+    for (Snapshot container : own) {
+      if (keep.contains(container.workId())) {
+        kept++;
         continue;
       }
       RunnerDocker.Result gone;
       try {
-        lastWords(id);
-        gone = docker.run(LifecycleArgv.rm(docker.binary(), id));
+        lastWords(container.id());
+        gone = docker.run(LifecycleArgv.rm(docker.binary(), container.id()));
       } catch (IllegalArgumentException notAnId) {
         LOG.warnf("%s ignored a line docker ps answered: %s", who, notAnId.getMessage());
         continue;
@@ -153,16 +149,57 @@ public final class OwnResources {
       if (gone.ok()) {
         removed++;
       } else {
-        LOG.warnf("%s could not remove its container %s: %s", who, id, gone.detail());
+        LOG.warnf("%s could not remove its container %s: %s", who, container.id(), gone.detail());
       }
     }
     if (removed > 0) {
       LOG.infof("%s removed %d container(s) outside its keep set", who, removed);
     }
-    if (!kept.isEmpty()) {
-      LOG.infof("%s kept %d container(s) of %d work item(s)", who, kept.size(), keepWorkIds.size());
+    if (kept > 0) {
+      LOG.infof("%s kept %d container(s) of %d work item(s)", who, kept, keepWorkIds.size());
     }
     return removed;
+  }
+
+  /** One line of {@link #snapshot}: a container's id and its work-item label's value. */
+  private record Snapshot(String id, String workId) {}
+
+  /**
+   * Every own container, id and work-item label together, in the one listing {@link #reconcile}
+   * decides against — {@code --format}, not a second {@code --filter} pass, so nothing created
+   * after this call can ever be read back by it. {@code workId} is {@code ""} for a container
+   * that carries no work-item label at all.
+   *
+   * @throws ListingFailed when docker did not answer
+   */
+  private List<Snapshot> snapshot() {
+    List<String> argv =
+        List.of(
+            docker.binary(),
+            "ps",
+            "-a",
+            "--filter",
+            ownerFilter(),
+            "--format",
+            "{{.ID}} {{.Label \"" + identity.workLabel() + "\"}}");
+    RunnerDocker.Result listed = docker.run(argv);
+    if (!listed.ok()) {
+      throw new ListingFailed(
+          who + " could not list runner " + runnerId + "'s containers: " + listed.detail());
+    }
+    List<Snapshot> rows = new ArrayList<>();
+    for (String line : listed.stdout().split("\n", -1)) {
+      if (line.isBlank()) {
+        continue;
+      }
+      String trimmed = line.strip();
+      int space = trimmed.indexOf(' ');
+      rows.add(
+          space < 0
+              ? new Snapshot(trimmed, "")
+              : new Snapshot(trimmed.substring(0, space), trimmed.substring(space + 1).strip()));
+    }
+    return rows;
   }
 
   /** {@code label=<labelRoot>=<runnerId>} — the exact ownership filter, the only one used here. */

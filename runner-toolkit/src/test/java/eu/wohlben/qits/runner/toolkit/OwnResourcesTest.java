@@ -72,6 +72,18 @@ class OwnResourcesTest {
     fake.container("qits-toy-runner-r1-2026.1.1", Map.of("qits.toy.runner.process", "r1"));
     fake.container("cs-workload", Map.of("qits.containers.managed", "container"));
     fake.container("qits-toy-runner-unlabelled", Map.of());
+    // What the one `docker ps --filter <owner> --format ...` snapshot would answer: this
+    // runner's three containers, id and work-item label together, nothing else reached.
+    fake.answer(
+        "ps",
+        0,
+        String.join(
+            "\n",
+            "qits-toy-runner-item-keep keep",
+            "qits-toy-runner-item-stale stale",
+            "qits-toy-runner-unworked ",
+            ""),
+        "");
 
     assertEquals(2, own(Toy.IDENTITY, "r1").reconcile(Set.of("keep")));
 
@@ -88,12 +100,11 @@ class OwnResourcesTest {
         List.of(
             List.of(
                 "ps",
-                "-aq",
+                "-a",
                 "--filter",
                 "label=qits.toy.runner=r1",
-                "--filter",
-                "label=qits.toy.runner.item=keep"),
-            List.of("ps", "-aq", "--filter", "label=qits.toy.runner=r1")),
+                "--format",
+                "{{.ID}} {{.Label \"qits.toy.runner.item\"}}")),
         fake.calls("ps"));
     assertEquals(
         List.of(
@@ -111,6 +122,7 @@ class OwnResourcesTest {
         "qits-toy-runner-item-stale",
         Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "stale"));
     fake.volume("qits-toy-runner-dot-claude-r1", Map.of("qits.toy.runner", "r1"));
+    fake.answer("ps", 0, "qits-toy-runner-item-stale stale\n", "");
 
     assertEquals(1, own(Toy.IDENTITY, "r1").reconcile(Set.of()));
 
@@ -132,21 +144,57 @@ class OwnResourcesTest {
     fake.container(
         "qits-toy-runner-item-stale",
         Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "stale"));
-    fake.answerFor(
-        "ps", "label=qits.toy.runner.item=keep", 1, "", "Cannot connect to the Docker daemon");
-
-    // A kept item that cannot be listed: a wrong guess would kill live work, so nothing goes.
-    assertEquals(0, own(Toy.IDENTITY, "r1").reconcile(Set.of("keep")));
-    assertTrue(fake.calls("rm").isEmpty(), fake.calls()::toString);
-
-    // The own listing itself failing: not read as "nothing there", and nothing goes either.
     fake.answer("ps", 1, "", "Cannot connect to the Docker daemon");
-    assertEquals(0, own(Toy.IDENTITY, "r1").reconcile(Set.of()));
+
+    // The one snapshot listing failing is not read as "nothing there": nothing goes either way,
+    // a wrong guess being worse than a leftover that waits for the next pass.
+    assertEquals(0, own(Toy.IDENTITY, "r1").reconcile(Set.of("keep")));
     assertTrue(fake.calls("rm").isEmpty(), fake.calls()::toString);
     OwnResources.ListingFailed failed =
         assertThrows(OwnResources.ListingFailed.class, () -> own(Toy.IDENTITY, "r1").containers());
     assertTrue(failed.getMessage().contains("Cannot connect"), failed::getMessage);
     assertEquals(Set.of("qits-toy-runner-item-stale"), fake.containers().keySet());
+  }
+
+  @Test
+  void reconcileNeverActsOnAContainerItsSnapshotNeverSaw() throws Exception {
+    // A container for a kept work item, present on the node — launched concurrently with the
+    // sweep, say — but the one docker ps snapshot never named it: whether that is because it did
+    // not exist yet when docker answered, or any other reason, reconcile has nothing to decide
+    // it against and so cannot touch it. This is qits-1233: the old two-listing shape instead
+    // read such a container as outside the keep set and removed it mid-launch.
+    fake.container(
+        "qits-toy-runner-item-3801",
+        Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "3801"));
+    fake.answer("ps", 0, "", "");
+
+    assertEquals(0, own(Toy.IDENTITY, "r1").reconcile(Set.of("3801")));
+
+    assertTrue(fake.calls("rm").isEmpty(), fake.calls()::toString);
+    assertEquals(Set.of("qits-toy-runner-item-3801"), fake.containers().keySet());
+  }
+
+  @Test
+  void reconcileDecidesEveryContainerFromTheOneSnapshotWithItsWorkLabel() throws Exception {
+    // The live shape of qits-1233: a sweep deciding against work items 1, 2, 3 and a concurrently
+    // launched workspace 3801, all four correctly read off the one snapshot and kept.
+    fake.container("a", Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "1"));
+    fake.container("b", Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "2"));
+    fake.container("c", Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "3"));
+    fake.container("d", Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "3801"));
+    // Outside the keep set, and carrying no work-item label at all: removed either way.
+    fake.container("e", Map.of("qits.toy.runner", "r1", "qits.toy.runner.item", "9"));
+    fake.container("f", Map.of("qits.toy.runner", "r1"));
+    fake.answer(
+        "ps",
+        0,
+        String.join("\n", "a 1", "b 2", "c 3", "d 3801", "e 9", "f ", ""),
+        "");
+
+    assertEquals(2, own(Toy.IDENTITY, "r1").reconcile(Set.of("1", "2", "3", "3801")));
+
+    assertEquals(Set.of("a", "b", "c", "d"), fake.containers().keySet());
+    assertEquals(List.of(List.of("rm", "-f", "e"), List.of("rm", "-f", "f")), fake.calls("rm"));
   }
 
   /**

@@ -100,15 +100,11 @@ public final class OwnResources {
    * went. For CI the keep set is the carried runs; for a workspace runner the server's desired
    * list. Failures are logged, never thrown.
    *
-   * <p><b>One snapshot, decided against whole.</b> Every own container and the work item it
-   * carries come from the very same {@code docker ps} answer — id and {@code
-   * --filter}-independent work-item label read off one line — so a container a concurrent launch
-   * creates for a kept work item after that snapshot was taken is simply absent from it, never a
-   * removal candidate. The earlier shape listed once per kept work id and once more, separately,
-   * for the owner filter alone: a container for a kept work item created in the gap between those
-   * two listings carried a label the first listing could not yet have matched, and the second,
-   * broader listing then read it as outside the keep set — this runner killing its own live work
-   * mid-launch (qits-1233).
+   * <p>Decided against one snapshot (qits-1233): every own container and the work item it carries
+   * come from the same {@code docker ps} answer, so a container a concurrent launch creates after
+   * it is absent from it and never a removal candidate. Listing the kept work items and the owner
+   * separately let a container created between the two listings count as outside the keep set, and
+   * the runner removed a workspace it had just launched.
    *
    * <p>A listing that fails keeps the whole pass from removing anything: a leftover waits for the
    * next reconcile, where a wrong guess would kill live work. Volumes are never touched — see the

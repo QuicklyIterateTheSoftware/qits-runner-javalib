@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-runner</artifactId>
+        <version>2026.1018.95331</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- The consumer pacts of the REST calls qits-runner-toolkit makes on an embedder's behalf
+         (qits-1163): the token mint at qits-idp, the log export to qits-observability and the
+         register door at the embedder's own host. A call a library makes is pacted by the service
+         that embeds it, recorded against the toolkit version that service pins — so this module
+         writes no pact file itself. It hands an embedding daemon the rows, the drives through the
+         REAL Bearer/Telemetry/Registration, and a guard that the features it declares are the ones
+         its main classes use; the daemon's own test writes pacts/<daemon>_qits-runner-javalib_<provider>.json.
+
+         An embedder adds THIS module in test scope, at the same version as qits-runner-toolkit.
+         Its dependencies are compile scope on purpose (as qits-pact-consumer's are): the embedder
+         gets the toolkit, qits-pact-consumer (pact-jvm, JUnit) and the two fixed providers'
+         golden masters transitively. The register host's golden masters are the embedder's own
+         test dependency: only one applies per embedder.
+
+         Not under runner-toolkit's ban on Jackson databind and JUnit: this jar is never linked
+         into a runner, only into a suite. -->
+    <artifactId>qits-runner-toolkit-contracts</artifactId>
+    <name>qits-runner :: runner-toolkit-contracts</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-runner-toolkit</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-pact-consumer</artifactId>
+            <version>${qits.pact-consumer.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-idp-golden-masters</artifactId>
+            <version>${qits.idp-golden-masters.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-observability-golden-masters</artifactId>
+            <version>${qits.observability-golden-masters.version}</version>
+        </dependency>
+        <!-- The two register hosts, test scope: this module's own suite runs the REGISTER rows
+             against both; an embedder pins its own host's. -->
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-workspaces-golden-masters</artifactId>
+            <version>${qits.workspaces-golden-masters.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-projects-golden-masters</artifactId>
+            <version>${qits.projects-golden-masters.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- FILTERING IS ON FOR ONE RESOURCE AND NOTHING ELSE: the version every pact's qits-via
+             names, which is the toolkit's (one release carries both jars). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>eu/wohlben/qits/runner/toolkit/contracts/runner-toolkit-contracts.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>eu/wohlben/qits/runner/toolkit/contracts/runner-toolkit-contracts.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

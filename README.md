@@ -15,7 +15,11 @@ later the CI runner — needs in common, written once rather than copied per kin
   `org.jboss.logging:jboss-logging` and `eu.wohlben.qits:qits-containers-driver`. No CDI, no
   Quarkus, no Jackson databind, no reflection: it links into a static musl native image.
 
-Both are extracted from qits-ci-runner-daemon `2026.1003.50846`, generalised behind one embedder
+- **`eu.wohlben.qits:qits-runner-toolkit-contracts`** — test scope only: the consumer pacts of the
+  REST calls the toolkit makes on its embedder's behalf (qits-1163). See "Pacting the toolkit's
+  calls" below.
+
+The first two are extracted from qits-ci-runner-daemon `2026.1003.50846`, generalised behind one embedder
 contract (`RunnerIdentity` + `RunnerDomain`). qits-ci-runner-daemon itself is not on this library
 yet; it moves in qits-772.
 
@@ -61,6 +65,79 @@ compiles and then fails at runtime with a `NoClassDefFoundError` the first time 
 built. What a server may reach is `eu.wohlben.qits.runner.toolkit.install.InstallScript` and
 `RunnerIdentity`, and `InstallPackageIsDependencyFreeTest` checks that their whole class closure
 refers to nothing but `java.*`, each other and the protocol.
+
+## Pacting the toolkit's calls (a daemon, qits-1163)
+
+The toolkit makes three REST calls for its embedder: the token mint at qits-idp (`Bearer`, POST
+`tokenUrl`), the log export to qits-observability (`Telemetry`, POST
+`/observability/api/otel/v1/logs`) and the register door at the embedder's own host
+(`Registration`, POST `RunnerIdentity.registerPath`). A call a library makes is pacted by **the
+service that embeds it**, against the toolkit version that service pins: the daemon is the
+consumer, the file is `pacts/<daemon>_qits-runner-javalib_<provider>.json`, and every interaction
+carries `comments.references["qits-via"] = {repository: "qits-runner-javalib", artifact:
+"eu.wohlben.qits:qits-runner-toolkit", version: <toolkit version>}`. This repository writes no pact
+file of its own and declares no `contracts.pacts`.
+
+`runner-toolkit-contracts` holds what every embedder shares — the rows per feature (`TOKEN`,
+`LOG_EXPORT`, `REGISTER`), drives that make each call through the REAL toolkit classes against the
+pact mock server, and `RunnerToolkitPact.VIA` — on top of `eu.wohlben.qits:qits-pact-consumer`. A
+daemon adds it in test scope **at the same version as `qits-runner-toolkit`** (it refuses a
+classpath where they differ), plus its register host's golden masters; qits-idp's and
+qits-observability's come with it:
+
+    <dependency>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-runner-toolkit-contracts</artifactId>
+        <version>${qits.runner.version}</version>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-workspaces-golden-masters</artifactId>  <!-- or qits-projects-golden-masters -->
+        <version><!-- a released calver --></version>
+        <scope>test</scope>
+    </dependency>
+
+and declares the features its real use sends, in one test:
+
+    // qits-workspaces-runner-daemon
+    @TestFactory
+    Stream<DynamicTest> theToolkitsCalls() {
+      return RunnerToolkitPact.forConsumer("qits-workspaces-runner-daemon")
+          .register(RunnerToolkitPact.WORKSPACES, "registerRunner", WorkspacesRunnerIdentity.IDENTITY)
+          .token()
+          .logExport()
+          .tests();
+    }
+
+    // qits-projects-desk-runner-daemon
+    @TestFactory
+    Stream<DynamicTest> theToolkitsCalls() {
+      return RunnerToolkitPact.forConsumer("qits-projects-desk-runner-daemon")
+          .register(RunnerToolkitPact.PROJECTS, "registerDeskRunner", DeskRunnerIdentity.IDENTITY)
+          .token()
+          .logExport()
+          .tests();
+    }
+
+`tests()` yields, as dynamic tests:
+
+- **the guard**: the declared features are exactly those the daemon's compiled main classes
+  (`target/classes`) can send — read off their constant pools. `RunnerLauncher` wires all three,
+  `RunnerRuntime` registers and mints, `Registration`/`Bearer`/`Telemetry` are their own feature.
+  An undeclared call fails it, and so does a declared one the daemon never makes;
+- **each pact file**: `ConsumerPact.compareOrWritePactFile()` (rewrite with `-Dgolden.update=true`)
+  and the references check — skipped while none of that provider's rows is recorded;
+- **each row**, through its drive — skipped with `needs provider state '<state>' for <operationId>
+  in <provider>` while the provider has not recorded that state. The register drive sends the
+  daemon's own `RunnerIdentity.registerPath`, so a path the host does not serve fails the pact.
+
+The pieces are public for a suite that wants them separately: `pacts()` (one `ConsumerPact` per
+provider, each `.via(VIA)`), `rows()` (`ToolkitRow.run()`), `assertDeclaresWhatTheMainClassesUse(Path)`,
+and the row lists `RunnerToolkitPact.tokenRows()`/`logExportRows()`/`registerRows(operationId)`.
+
+The module's own suite runs every row through the drives under a dummy consumer, against the
+published golden masters and against fixture recordings of every state, and writes nothing.
 
 ## The embedder's contract
 

@@ -4,11 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- qits-runner-javalib: the shared scaffolding every pull-based runner embeds. Two published
+    <!-- qits-runner-javalib: the shared scaffolding every pull-based runner embeds. Three published
          jars — eu.wohlben.qits:qits-runner-protocol (the lifecycle frames and a codec that
          delegates every other frame to the runner's own) and eu.wohlben.qits:qits-runner-toolkit
          (register, bearer, control socket, slots, self-update, decommission, health, GC, install
-         script) — plus runner-harness, an unpublished harness runner and its suite that proves the
+         script) — plus eu.wohlben.qits:qits-runner-toolkit-contracts (test scope for an embedder:
+         the consumer pacts of the toolkit's REST calls, qits-1163), plus runner-harness, an unpublished harness runner and its suite that proves the
          toolkit against a fake host. Extracted from qits-ci-runner-daemon 2026.1003.50846; that
          repository keeps its own private copy until qits-772 moves it onto this one.
 
@@ -31,6 +32,7 @@
         <module>runner-protocol</module>
         <module>runner-toolkit</module>
         <module>runner-harness</module>
+        <module>runner-toolkit-contracts</module>
     </modules>
 
     <properties>
@@ -45,6 +47,18 @@
         <!-- qits-containers-driver (qits-623), pinned to a released calver and moved only by the
              maintenance dependencies bump — never by hand. -->
         <qits.containers-driver.version>2026.1009.100140</qits.containers-driver.version>
+
+        <!-- runner-toolkit-contracts (qits-1163): the shared pact helper and the recordings of the
+             two providers every runner calls through the toolkit (qits-idp's token endpoint,
+             qits-observability's OTLP receiver), compile scope there so an embedder gets them by
+             adding that one module in test scope; and the two register hosts' recordings, test
+             scope only, since an embedder supplies its own host's. Released calvers, moved only by
+             the maintenance dependencies bump — never by hand. -->
+        <qits.pact-consumer.version>2026.1018.135552</qits.pact-consumer.version>
+        <qits.idp-golden-masters.version>2026.1012.180836</qits.idp-golden-masters.version>
+        <qits.observability-golden-masters.version>2026.1010.134226</qits.observability-golden-masters.version>
+        <qits.workspaces-golden-masters.version>2026.1016.90656</qits.workspaces-golden-masters.version>
+        <qits.projects-golden-masters.version>2026.1016.112931</qits.projects-golden-masters.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain
              developer build resolves off this public default. -->

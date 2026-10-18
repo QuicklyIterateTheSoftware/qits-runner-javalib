@@ -1,0 +1,76 @@
+{
+  "formatVersion": 1,
+  "provider": "qits-projects",
+  "states": [
+    {
+      "name": "an unregistered runner",
+      "params": {
+        "authorization": "Bearer qits_tok_contract-registration",
+        "runnerId": "00000000-0000-4000-8000-000000000020"
+      },
+      "operations": [
+        {
+          "operationId": "registerDeskRunner",
+          "method": "POST",
+          "path": "/projects/api/runners/{runnerId}/register",
+          "headers": {
+            "Authorization": "{authorization}"
+          },
+          "body": {
+            "capabilities": {
+              "docker": true,
+              "arch": "amd64",
+              "os": "linux",
+              "labels": {
+                "site": "home"
+              }
+            }
+          },
+          "status": 200,
+          "file": "an-unregistered-runner/registerDeskRunner.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a registered runner",
+      "params": {
+        "authorization": "Bearer qits_tok_contract-registration",
+        "runnerId": "00000000-0000-4000-8000-000000000020"
+      },
+      "operations": [
+        {
+          "operationId": "registerDeskRunner",
+          "method": "POST",
+          "path": "/projects/api/runners/{runnerId}/register",
+          "headers": {
+            "Authorization": "{authorization}"
+          },
+          "body": {
+            "capabilities": {
+              "docker": true,
+              "arch": "amd64",
+              "os": "linux",
+              "labels": {
+                "site": "home"
+              }
+            }
+          },
+          "status": 409,
+          "file": "a-registered-runner/registerDeskRunner.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    }
+  ]
+}

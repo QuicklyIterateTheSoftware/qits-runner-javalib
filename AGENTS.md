@@ -20,7 +20,18 @@ published.
 
 ## Module conventions
 
-`eu.wohlben.qits.runner.{protocol,toolkit,harness}`, one package per module, no split packages.
+`eu.wohlben.qits.runner.{protocol,toolkit,harness}` and `eu.wohlben.qits.runner.toolkit.contracts`,
+one package per module, no split packages.
+
+**`runner-toolkit-contracts` is test-scope only, and writes no pact file** (qits-1163). The
+toolkit's REST calls (token, log export, register) are pacted by each embedding daemon as consumer,
+through `RunnerToolkitPact.VIA`; this module only ships the rows, the drives through the real
+`Bearer`/`Telemetry`/`Registration`, and the guard that a daemon declares what its main classes use
+(README "Pacting the toolkit's calls"). It may depend on Jackson and JUnit — it never links into a
+runner. Never add a `contracts.pacts` entry to `release.yml`, and never call
+`compareOrWritePactFile()` from its own suite. A change to what `Bearer`, `Telemetry` or
+`Registration` sends is a change to every embedder's pact: keep the drives and rows in step, and
+expect each daemon's pact file to move on its next bump.
 
 **`runner-protocol` is framework-free and dependency-free, forever.** Plain records, plain
 constructors, no annotations. `maven-enforcer-plugin` fails the build the moment a compile- or

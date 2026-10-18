@@ -14,7 +14,7 @@
          proving the toolkit before qits-workspaces-runner-daemon (qits-624) does it live. NOT
          PUBLISHED: this is a test fixture, not a product. maven.deploy.skip and
          maven.install.skip keep it out of the local repository and off the release's artifact
-         list; .config/qits/release.yml names only runner-protocol and runner-toolkit, and the
+         list; .config/qits/release.yml never names it, and the
          release CLI publishes only what it declares either way. -->
     <artifactId>qits-runner-harness</artifactId>
     <name>qits-runner :: runner-harness</name>

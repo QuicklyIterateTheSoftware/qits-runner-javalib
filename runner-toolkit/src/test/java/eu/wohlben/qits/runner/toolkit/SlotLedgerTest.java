@@ -62,6 +62,35 @@ class SlotLedgerTest {
   }
 
   @Test
+  void aBacklogWhileTheReserveIsOutstandingSurvivesTheTakeThatAnswersIt() {
+    SlotLedger r = new SlotLedger();
+    r.onAck(6);
+    assertTrue(r.onBacklog(1));
+    assertFalse(r.onBacklog(1), "the host's post-claim count, while the Reserve is still out");
+    assertTrue(r.taken("A"), "the take must not wipe out the backlog the host just sent");
+  }
+
+  @Test
+  void aBacklogWhileTheReserveIsOutstandingSurvivesTheNothingThatAnswersIt() {
+    SlotLedger r = new SlotLedger();
+    r.onAck(6);
+    assertTrue(r.onBacklog(1));
+    assertFalse(r.onBacklog(2), "a newer row queued while the Reserve is still out");
+    assertTrue(r.onNothing(), "that newer Backlog outranks the park");
+  }
+
+  @Test
+  void onceTheNothingRaceReReservesAPlainNothingWithNoNewerBacklogStillParks() {
+    SlotLedger r = new SlotLedger();
+    r.onAck(6);
+    assertTrue(r.onBacklog(1));
+    assertFalse(r.onBacklog(2));
+    assertTrue(r.onNothing(), "re-reserves on the newer Backlog");
+    assertFalse(r.onNothing(), "no further Backlog arrived this time: an ordinary park");
+    assertTrue(r.onBacklog(1), "and the next Backlog un-parks it as ever");
+  }
+
+  @Test
   void aReleasedRunFreesItsSlotAndAsksAgainWhenThereIsWork() {
     SlotLedger r = new SlotLedger();
     r.onAck(1);

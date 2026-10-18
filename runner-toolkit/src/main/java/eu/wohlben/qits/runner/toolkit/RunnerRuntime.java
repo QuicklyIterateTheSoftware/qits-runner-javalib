@@ -378,7 +378,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     switch (message) {
       case Ack ack -> onAck(ack);
       case Backlog backlog -> reserveIf(ledger.onBacklog(backlog.queued()));
-      case Nothing _ -> ledger.onNothing();
+      case Nothing _ -> reserveIf(ledger.onNothing());
       case Upgrade upgrade when !settings.selfUpdate() ->
           // Deployer-managed: the deployer replaces this container, so there is nothing to drain
           // for and no successor to start. The frame has no refusal to answer with; the capability

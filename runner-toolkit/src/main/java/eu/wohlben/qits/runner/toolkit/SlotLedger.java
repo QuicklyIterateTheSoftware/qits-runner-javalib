@@ -14,12 +14,19 @@ import java.util.Set;
  * itself. That is what makes the rule testable without a socket.
  *
  * <ul>
- *   <li>{@code Nothing} parks the runner until the next {@code Backlog} or {@link #released}: the
+ *   <li>{@code Nothing} parks the runner until the next {@code Backlog} or {@link #released} — the
  *       host just said there is nothing this runner can take, and asking again at once would spin
- *       on a queue it cannot serve.
+ *       on a queue it cannot serve — <b>unless</b> a {@code Backlog} already arrived while that
+ *       {@code Reserve} sat outstanding: that number is the host's word spoken after the Reserve it
+ *       is about to answer, so it overrides the park and the ledger reserves again at once instead.
+ *       At worst one extra Reserve comes back {@code Nothing} too; it can never spin, because every
+ *       further re-reserve needs a fresh {@code Backlog} of its own.
  *   <li>{@link #taken} decrements the remembered backlog, because the host's next push says the same
  *       thing a round trip later; without it a runner with two free slots and a backlog of one
- *       would reserve twice and collect a guaranteed {@code Nothing}.
+ *       would reserve twice and collect a guaranteed {@code Nothing}. But a {@code Backlog} that
+ *       arrived while this very Reserve sat outstanding is newer than the take it is answering — the
+ *       host had already excluded that row — so it is kept exactly as received rather than
+ *       decremented a second time.
  *   <li>{@link #released} is the only thing that frees a slot. <b>What holds a slot is the
  *       domain's</b>: for CI a run from its {@code Take} to its {@code Released}; for a workspace
  *       runner a running container, from its start to its stop.
@@ -36,6 +43,16 @@ public final class SlotLedger {
   private boolean outstanding;
   private boolean parked;
   private boolean draining;
+
+  /**
+   * A {@code Backlog} arrived while a {@code Reserve} was outstanding — so it already counted the
+   * row that Reserve is about to claim, or a row older than it, and is newer than whatever {@link
+   * #taken} or {@link #onNothing} is about to do with the memory of that Reserve. Set in {@link
+   * #onBacklog}, cleared the moment the outstanding Reserve is accounted for: answered ({@link
+   * #taken}, {@link #onNothing}) or re-sent ({@link #decide}).
+   */
+  private boolean backlogSinceReserve;
+
   private final Set<String> held = new LinkedHashSet<>();
 
   /**
@@ -53,19 +70,29 @@ public final class SlotLedger {
   public synchronized boolean onBacklog(int queued) {
     backlog = Math.max(0, queued);
     parked = false;
+    if (outstanding) {
+      backlogSinceReserve = true;
+    }
     return decide();
   }
 
   /** A work item now holds a slot: the outstanding {@code Reserve} is answered. */
   public synchronized boolean taken(String workId) {
+    if (!backlogSinceReserve) {
+      backlog = Math.max(0, backlog - 1);
+    }
+    backlogSinceReserve = false;
     outstanding = false;
     held.add(workId);
-    backlog = Math.max(0, backlog - 1);
     return decide();
   }
 
   public synchronized boolean onNothing() {
     outstanding = false;
+    if (backlogSinceReserve) {
+      backlogSinceReserve = false;
+      return decide();
+    }
     parked = true;
     return false;
   }
@@ -97,6 +124,7 @@ public final class SlotLedger {
     backlog = 0;
     outstanding = false;
     parked = false;
+    backlogSinceReserve = false;
     carried.addAll(held);
   }
 
@@ -141,6 +169,7 @@ public final class SlotLedger {
       return false;
     }
     outstanding = true;
+    backlogSinceReserve = false;
     return true;
   }
 }

@@ -224,6 +224,36 @@ class RunnerRuntimeTest {
   }
 
   /**
+   * The race this ticket fixes: a {@code Backlog} that counts a newer row arrives while the first
+   * {@code Reserve} is still outstanding, and only then does the host's {@code Nothing} answer that
+   * first Reserve. The newer Backlog must outrank the Nothing's park, so the runtime reserves again
+   * at once instead of sitting parked over a row the host already told it about.
+   */
+  @Test
+  void aNothingAfterANewerBacklogWhileTheReserveWasOutstandingSendsAnotherReserve()
+      throws Exception {
+    host.script =
+        (h, message) -> {
+          if (message instanceof Hello) {
+            h.send(new Ack(1, 1));
+            h.send(new Backlog(1));
+          } else if (message instanceof Reserve) {
+            if (h.all(Reserve.class).size() == 1) {
+              h.send(new Backlog(2));
+              h.send(new Nothing());
+            } else {
+              h.send(new Toy.Take("item-a"));
+            }
+          }
+        };
+    start("t", 10_000);
+
+    host.await(Reserve.class, 2);
+    awaitHeld(1);
+    assertEquals(List.of("item-a"), runner.session().held());
+  }
+
+  /**
    * The host re-sends {@code Ack} whenever an admin changes the slot cap, and the runner must pick
    * up every one, not just the one that answered its {@code Hello}: a cap of 3 lets three
    * Reserve/take round trips happen with no release between them.

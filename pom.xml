@@ -57,7 +57,7 @@
         <qits.pact-consumer.version>2026.1018.164604</qits.pact-consumer.version>
         <qits.idp-golden-masters.version>2026.1018.175524</qits.idp-golden-masters.version>
         <qits.observability-golden-masters.version>2026.1018.155850</qits.observability-golden-masters.version>
-        <qits.workspaces-golden-masters.version>2026.1016.90656</qits.workspaces-golden-masters.version>
+        <qits.workspaces-golden-masters.version>2026.1019.70413</qits.workspaces-golden-masters.version>
         <qits.projects-golden-masters.version>2026.1018.195756</qits.projects-golden-masters.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain

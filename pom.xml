@@ -54,10 +54,10 @@
              adding that one module in test scope; and the two register hosts' recordings, test
              scope only, since an embedder supplies its own host's. Released calvers, moved only by
              the maintenance dependencies bump — never by hand. -->
-        <qits.pact-consumer.version>2026.1018.164604</qits.pact-consumer.version>
-        <qits.idp-golden-masters.version>2026.1018.175524</qits.idp-golden-masters.version>
+        <qits.pact-consumer.version>2026.1019.82625</qits.pact-consumer.version>
+        <qits.idp-golden-masters.version>2026.1019.100619</qits.idp-golden-masters.version>
         <qits.observability-golden-masters.version>2026.1018.155850</qits.observability-golden-masters.version>
-        <qits.workspaces-golden-masters.version>2026.1019.70413</qits.workspaces-golden-masters.version>
+        <qits.workspaces-golden-masters.version>2026.1019.95426</qits.workspaces-golden-masters.version>
         <qits.projects-golden-masters.version>2026.1018.195756</qits.projects-golden-masters.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain

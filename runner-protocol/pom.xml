@@ -38,7 +38,7 @@
         <dependency>
             <groupId>eu.wohlben.qits</groupId>
             <artifactId>qits-ci-runner-protocol</artifactId>
-            <version>2026.1020.133322</version>
+            <version>2026.1020.144111</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

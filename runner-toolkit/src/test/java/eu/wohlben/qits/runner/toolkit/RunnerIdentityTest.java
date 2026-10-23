@@ -217,6 +217,29 @@ class RunnerIdentityTest {
   }
 
   /**
+   * qits-1524: the roots and derived names qits-system-runner-daemon (qits-1481) declares itself
+   * with, against the exact values qits-1481's dossier "Identity" and "Derived names" give.
+   */
+  @Test
+  void theSystemShapedIdentityDerivesQits1481sSystemColumn() {
+    RunnerIdentity system = Shapes.SYSTEM;
+    String id = "1a2b3c4d-5e6f-7a8b-9c0d-112233445566";
+    assertEquals("qits.system.runner", system.ownerLabel());
+    assertEquals("qits.system.runner.lease", system.workLabel());
+    assertEquals("qits-system-runner-1a2b3c4d-2026.1", system.containerName(id, "2026.1"));
+    assertEquals("qits-system-runner-state-1a2b3c4d", system.stateVolume(id));
+    assertEquals("qits-system-runner-dot-claude-1a2b3c4d", system.nodeVolume(id, "dot-claude"));
+    assertEquals("QITS_SYSTEM_RUNNER_URL", system.env("URL"));
+    assertEquals("/var/lib/qits-system-runner", system.defaultStateDir());
+    assertEquals("qits/qits-system-runner", system.imageRepository());
+    assertEquals("/system/api/targets/" + id + "/register", system.registerPath(id));
+    assertTrue(
+        KnownRunnerNamespaces.ALL.contains(KnownRunnerNamespaces.SYSTEM),
+        "SYSTEM must be listed in ALL");
+    assertTrue(KnownRunnerNamespaces.SYSTEM.matches(system), "the system-shaped identity has SYSTEM's roots");
+  }
+
+  /**
    * qits-1098: the roots qits-projects-desk-runner-daemon (qits-767) declares itself with are
    * listed here, and a {@link RunnerIdentity} built from them is accepted by the same belts as any
    * other runner's.
@@ -235,7 +258,7 @@ class RunnerIdentityTest {
   @Test
   void noKnownNamespaceIsAPrefixOfAnother() {
     List<KnownRunnerNamespaces.Root> roots = KnownRunnerNamespaces.ALL;
-    assertTrue(roots.size() >= 4, "ci, workspaces, projects-desk and harness at least");
+    assertTrue(roots.size() >= 5, "ci, workspaces, projects-desk, harness and system at least");
     List<String> overlaps = new ArrayList<>();
     for (KnownRunnerNamespaces.Root a : roots) {
       // Each is a root an identity accepts: none is a tenant's, none is outside the grammar.

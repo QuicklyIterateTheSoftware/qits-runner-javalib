@@ -62,8 +62,16 @@ public final class KnownRunnerNamespaces {
   public static final Root HARNESS =
       new Root("harness", "QITS_HARNESS_RUNNER_", "qits.harness.runner", "qits-harness-runner");
 
+  /**
+   * qits-system-runner-daemon's (qits-1524), the one runner for targets, leases and typed slots
+   * that qits-1481 builds; its kind is {@code targets}, not {@code system}, because that is what
+   * it runs.
+   */
+  public static final Root SYSTEM =
+      new Root("targets", "QITS_SYSTEM_RUNNER_", "qits.system.runner", "qits-system-runner");
+
   /** Every kind on the estate. */
-  public static final List<Root> ALL = List.of(CI, WORKSPACES, PROJECTS_DESK, HARNESS);
+  public static final List<Root> ALL = List.of(CI, WORKSPACES, PROJECTS_DESK, HARNESS, SYSTEM);
 
   private KnownRunnerNamespaces() {}
 }

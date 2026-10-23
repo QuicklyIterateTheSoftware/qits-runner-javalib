@@ -20,8 +20,8 @@ later the CI runner — needs in common, written once rather than copied per kin
   calls" below.
 
 The first two are extracted from qits-ci-runner-daemon `2026.1003.50846`, generalised behind one embedder
-contract (`RunnerIdentity` + `RunnerDomain`). qits-ci-runner-daemon itself is not on this library
-yet; it moves in qits-772.
+contract (`RunnerIdentity` + `RunnerDomain`). qits-ci-runner-daemon already depends on this library
+for its health-check machinery; moving the rest of its own runner onto `RunnerDomain` is qits-772.
 
 The third module, `runner-harness`, is never published: it is a complete runner embedding the
 toolkit, with a toy domain, and its suite runs that runner's whole life against a fake host. It is
@@ -369,30 +369,31 @@ For runner id `<id>`, `<id8>` its first eight characters. Nothing else exists: t
 and removes only by an exact `label=` filter or a name it derived, never by `name=` (docker matches
 that as a substring).
 
-| What | Derived as | Harness | Workspaces (qits-624) | CI (qits-772, today's spelling) |
-|---|---|---|---|---|
-| ownership label (workloads, volumes) | `<labelRoot>=<id>` | `qits.harness.runner` | `qits.workspaces.runner` | `qits.ci.runner` |
-| work-item label | `<labelRoot>.<workLabelSuffix>=<work id>` | `qits.harness.runner.item` | `qits.workspaces.runner.workspace` | `qits.ci.runner.run` |
-| runner process label | `<labelRoot>.process=<id>` | `qits.harness.runner.process` | `qits.workspaces.runner.process` | `qits.ci.runner.process` |
-| version label | `<labelRoot>.version=<v>` | `qits.harness.runner.version` | `qits.workspaces.runner.version` | `qits.ci.runner.version` |
-| helper label | `<labelRoot>.decommission=<id>` | `qits.harness.runner.decommission` | `qits.workspaces.runner.decommission` | `qits.ci.runner.decommission` |
-| self-update capability label | `<labelRoot>.self-update` | `qits.harness.runner.self-update` | `qits.workspaces.runner.self-update` | `qits.ci.runner.self-update` |
-| driver label namespace | `<labelRoot>.` | `qits.harness.runner.` | `qits.workspaces.runner.` | `qits.ci.runner.` |
-| runner container | `<namePrefix>-<id8>-<version>` | `qits-harness-runner-<id8>-<v>` | `qits-workspaces-runner-<id8>-<v>` | `qits-ci-runner-<id8>-<v>` |
-| helper container | `<namePrefix>-<id8>-decommission` | `qits-harness-runner-<id8>-decommission` | `qits-workspaces-runner-<id8>-decommission` | `qits-ci-runner-<id8>-decommission` |
-| state volume | `<namePrefix>-state-<id8>` | `qits-harness-runner-state-<id8>` | `qits-workspaces-runner-state-<id8>` | `qits-ci-runner-state-<id8>` |
-| a per-node volume (`nodeVolume(id, purpose)`) | `<namePrefix>-<purpose>-<id8>` | `qits-harness-runner-scratch-<id8>` | `qits-workspaces-runner-dot-claude-<id8>` | — |
-| any other named resource (`nodeName(id, purpose)`) | `<namePrefix>-<purpose>-<id8>` | `qits-harness-runner-item-<item8>` | — | its builder, if qits-772 renames it |
-| environment | `<envPrefix><NAME>` | `QITS_HARNESS_RUNNER_URL`, … | `QITS_WORKSPACES_RUNNER_URL`, … | `QITS_CI_RUNNER_URL`, … |
-| state dir in the container | `defaultStateDir` | `/var/lib/qits-harness-runner` | `/var/lib/qits-workspaces-runner` | `/var/lib/qits-ci-runner` |
-| image | `<registry>/<imageRepository>:<version>` | `qits/qits-harness-runner` | `qits/qits-workspaces-runner` | `qits/qits-ci-runner` |
-| log bucket | `_service/<serviceName>` | `_service/qits-harness-runner` | `_service/qits-workspaces-runner` | `_service/qits-ci-runner` |
+| What | Derived as | Harness | Workspaces (qits-624) | CI (qits-772, today's spelling) | qits-system-runner (qits-1524) |
+|---|---|---|---|---|---|
+| ownership label (workloads, volumes) | `<labelRoot>=<id>` | `qits.harness.runner` | `qits.workspaces.runner` | `qits.ci.runner` | `qits.system.runner` |
+| work-item label | `<labelRoot>.<workLabelSuffix>=<work id>` | `qits.harness.runner.item` | `qits.workspaces.runner.workspace` | `qits.ci.runner.run` | `qits.system.runner.lease` |
+| runner process label | `<labelRoot>.process=<id>` | `qits.harness.runner.process` | `qits.workspaces.runner.process` | `qits.ci.runner.process` | `qits.system.runner.process` |
+| version label | `<labelRoot>.version=<v>` | `qits.harness.runner.version` | `qits.workspaces.runner.version` | `qits.ci.runner.version` | `qits.system.runner.version` |
+| helper label | `<labelRoot>.decommission=<id>` | `qits.harness.runner.decommission` | `qits.workspaces.runner.decommission` | `qits.ci.runner.decommission` | `qits.system.runner.decommission` |
+| self-update capability label | `<labelRoot>.self-update` | `qits.harness.runner.self-update` | `qits.workspaces.runner.self-update` | `qits.ci.runner.self-update` | `qits.system.runner.self-update` |
+| driver label namespace | `<labelRoot>.` | `qits.harness.runner.` | `qits.workspaces.runner.` | `qits.ci.runner.` | `qits.system.runner.` |
+| runner container | `<namePrefix>-<id8>-<version>` | `qits-harness-runner-<id8>-<v>` | `qits-workspaces-runner-<id8>-<v>` | `qits-ci-runner-<id8>-<v>` | `qits-system-runner-<id8>-<v>` |
+| helper container | `<namePrefix>-<id8>-decommission` | `qits-harness-runner-<id8>-decommission` | `qits-workspaces-runner-<id8>-decommission` | `qits-ci-runner-<id8>-decommission` | `qits-system-runner-<id8>-decommission` |
+| state volume | `<namePrefix>-state-<id8>` | `qits-harness-runner-state-<id8>` | `qits-workspaces-runner-state-<id8>` | `qits-ci-runner-state-<id8>` | `qits-system-runner-state-<id8>` |
+| a per-node volume (`nodeVolume(id, purpose)`) | `<namePrefix>-<purpose>-<id8>` | `qits-harness-runner-scratch-<id8>` | `qits-workspaces-runner-dot-claude-<id8>` | — | `qits-system-runner-dot-claude-<id8>` |
+| any other named resource (`nodeName(id, purpose)`) | `<namePrefix>-<purpose>-<id8>` | `qits-harness-runner-item-<item8>` | — | its builder, if qits-772 renames it | its builder, `qits-system-runner-buildkitd-<id8>` |
+| environment | `<envPrefix><NAME>` | `QITS_HARNESS_RUNNER_URL`, … | `QITS_WORKSPACES_RUNNER_URL`, … | `QITS_CI_RUNNER_URL`, … | `QITS_SYSTEM_RUNNER_URL`, … |
+| state dir in the container | `defaultStateDir` | `/var/lib/qits-harness-runner` | `/var/lib/qits-workspaces-runner` | `/var/lib/qits-ci-runner` | `/var/lib/qits-system-runner` |
+| image | `<registry>/<imageRepository>:<version>` | `qits/qits-harness-runner` | `qits/qits-workspaces-runner` | `qits/qits-ci-runner` | `qits/qits-system-runner` |
+| log bucket | `_service/<serviceName>` | `_service/qits-harness-runner` | `_service/qits-workspaces-runner` | `_service/qits-ci-runner` | `_service/qits-system-runner` |
 
 Node-wide commands are limited to `image prune -f` (dangling only) and `image rm` without `-f`,
 both safe beside a neighbour because docker refuses to remove an image a container still uses.
 
-Known residue for qits-772: CI's builder volume is spelled `qits-buildkitd-state`, without the
-prefix, so the CI embedder cannot express it as a teardown item; qits-772 renames or migrates it.
+CI's builder volume is already spelled `qits-ci-runner-buildkitd-state` (`BuildPlane.STATE_VOLUME`),
+with the prefix. `qits-buildkitd-state`, without it, belongs to qits-containers' own platform
+builder — a different volume the CI runner never touches.
 
 ## Rendering the install script (a server)
 

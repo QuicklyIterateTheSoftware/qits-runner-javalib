@@ -19,6 +19,11 @@ import org.jboss.logging.Logger;
  * there is no successor to remove the exited predecessor, and the state volume holds a client the
  * platform has already revoked, so it is dead weight rather than something to hand on.
  *
+ * <p><b>Only the platform's explicit word starts it</b>: a {@code Retire} of kind {@code DELETED},
+ * or a 1008 {@code RUNNER_DELETED} close. A revoked credential alone — an {@code invalid_client}
+ * streak at the token endpoint — never does (qits-1592): that runner only stops, with its restart
+ * policy taken away, and every container and volume it labelled stays where it is.
+ *
  * <pre>
  *   the runner process ({@link #leave}), after the domain's onDecommission:
  *     client.json deleted          → a restart of anything under this volume cannot dial as it

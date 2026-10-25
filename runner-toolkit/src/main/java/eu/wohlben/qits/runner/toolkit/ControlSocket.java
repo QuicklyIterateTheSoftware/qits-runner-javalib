@@ -30,24 +30,29 @@ import org.jboss.logging.Logger;
  * expired while the socket was up is replaced rather than presented. The edge's JWT expiry on an
  * open socket is the server's to tolerate; the runner only re-mints per dial.
  *
- * <p><b>Forever ends at one thing: the platform saying this runner no longer exists.</b> A runner
- * deleted while it was offline is never sent its {@code Retire}; it finds out on its next dial, and
- * would otherwise redial for as long as its host is up. Two answers say it, and only two:
+ * <p><b>Forever ends at two things, and only one of them is the platform saying this runner no
+ * longer exists.</b> A runner deleted while it was offline is never sent its {@code Retire}; it
+ * finds out on its next dial, and would otherwise redial for as long as its host is up.
  *
  * <ul>
  *   <li>the host closes the socket 1008 {@link CloseReason#RUNNER_DELETED} — the host's own word
- *       that the bearer is valid and no runner is registered with it. Believed at once.
+ *       that the bearer is valid and no runner is registered with it. Believed at once, and told
+ *       to the listener as {@link Listener#onDeleted}: the runner decommissions itself.
  *   <li>the token endpoint refuses the client with {@code invalid_client} ({@link
- *       Bearer.ClientRefused}) — what a deleted runner's revoked client gets. Believed only as a
- *       streak: every dial for at least {@link RunnerSettings.Timing#refusalConfirmMillis} and at
- *       least {@link RunnerSettings.Timing#refusalConfirmAttempts} dials, with nothing else in
- *       between, since one such answer could be an idp that is not ready yet.
+ *       Bearer.ClientRefused}). Believed only as a streak: every dial for at least {@link
+ *       RunnerSettings.Timing#refusalConfirmMillis} and at least {@link
+ *       RunnerSettings.Timing#refusalConfirmAttempts} dials, with nothing else in between, since
+ *       one such answer could be an idp that is not ready yet. <b>Even then it is not read as a
+ *       deletion</b> (qits-1592): a revoked or deleted idp client says only that this runner's
+ *       credential is gone, not that the platform deleted the runner, and on 2026-10-24 reading it
+ *       as a deletion purged every workspace on a node. It is told to the listener as {@link
+ *       Listener#onCredentialsRevoked}: the runner stops, and removes nothing.
  * </ul>
  *
  * Everything else — a 502 from the edge, a refused connection, a timeout, a 401 on the upgrade, a
  * 5xx from the idp, any other close — is the platform being down or restarting, breaks a streak, and
- * is retried as it always was. On either answer the socket stops for good and tells its listener
- * {@link Listener#onDeleted}.
+ * is retried as it always was. On either answer the socket stops for good before it tells its
+ * listener.
  *
  * <p>Frames are decoded through the runner's {@link RunnerCodec}: lifecycle and domain alike. An
  * undecodable or unknown frame is dropped and logged, never fatal.
@@ -71,10 +76,19 @@ public final class ControlSocket<D extends RunnerMessage> {
     void onClosed();
 
     /**
-     * The platform said this runner no longer exists (see the class javadoc). The socket has stopped
-     * for good and will not redial; {@code why} is for the log.
+     * The host said this runner no longer exists — a 1008 {@code RUNNER_DELETED} close (see the
+     * class javadoc). The socket has stopped for good and will not redial; {@code why} is for the
+     * log.
      */
     default void onDeleted(String why) {}
+
+    /**
+     * The token endpoint has refused this runner's client with {@code invalid_client} for a whole
+     * streak (see the class javadoc): its credential is revoked. That is <b>not</b> a deletion and
+     * must never be treated as one — nothing of the runner's may be removed on it. The socket has
+     * stopped for good and will not redial; {@code why} is for the log.
+     */
+    default void onCredentialsRevoked(String why) {}
 
     /**
      * A {@code Heartbeat} was written on a connected socket — the periodic proof this runner is
@@ -147,7 +161,7 @@ public final class ControlSocket<D extends RunnerMessage> {
         .onSuccess(this::onConnected)
         .onFailure(
             t -> {
-              if (confirmsDeletion(t)) {
+              if (confirmsRevocation(t)) {
                 return;
               }
               long backoff = backoffFor(attempt);
@@ -161,9 +175,9 @@ public final class ControlSocket<D extends RunnerMessage> {
   /**
    * Count a failed dial toward the {@code invalid_client} streak, or break the streak; true when the
    * streak is now long enough to believe, in which case the socket has stopped and the listener has
-   * been told.
+   * been told its credential is revoked.
    */
-  private boolean confirmsDeletion(Throwable failure) {
+  private boolean confirmsRevocation(Throwable failure) {
     if (!(failure instanceof Bearer.ClientRefused refused)) {
       refusedSinceMillis = 0;
       refusals = 0;
@@ -178,11 +192,11 @@ public final class ControlSocket<D extends RunnerMessage> {
     if (refusals < timing.refusalConfirmAttempts() || lasted < timing.refusalConfirmMillis()) {
       LOG.warnf(
           "%s's client was refused (%s), %d time(s) in a row over %ds; if it goes on for"
-              + " %ds this runner reads itself as deleted",
+              + " %ds this runner reads its credential as revoked and stops",
           who, refused.getMessage(), refusals, lasted / 1000, timing.refusalConfirmMillis() / 1000);
       return false;
     }
-    deleted(
+    revoked(
         "the token endpoint has refused this runner's client for "
             + lasted / 1000
             + "s ("
@@ -192,13 +206,22 @@ public final class ControlSocket<D extends RunnerMessage> {
     return true;
   }
 
-  /** The platform said this runner is gone: stop for good, then say so. Once. */
+  /** The host said this runner is gone: stop for good, then say so. Once. */
   private void deleted(String why) {
     if (stopped) {
       return;
     }
     stop();
     listener.onDeleted(why);
+  }
+
+  /** This runner's credential is refused for good: stop for good, then say so. Once. */
+  private void revoked(String why) {
+    if (stopped) {
+      return;
+    }
+    stop();
+    listener.onCredentialsRevoked(why);
   }
 
   long backoffFor(int attempt) {

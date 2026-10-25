@@ -36,15 +36,17 @@ interface NodeLifecycle {
   void firstAck();
 
   /**
-   * The runner learned it was deleted: stop the self-update and the housekeeping at once, on the
-   * loop, before the domain is asked to stop its work — neither may start anything after this. A
-   * docker call already in flight is not interrupted; it finishes under its deadline.
+   * The runner learned it was deleted, or that its credential is revoked: stop the self-update and
+   * the housekeeping at once, on the loop, before anything else happens — neither may start
+   * anything after this. A docker call already in flight is not interrupted; it finishes under its
+   * deadline.
    */
   void halt();
 
   /**
    * The node half of a decommission, after the ledger drained, the socket stopped and the domain's
-   * {@link RunnerDomain#onDecommission} returned. Never throws.
+   * {@link RunnerDomain#onDecommission} returned. Only for a runner the platform deleted — never
+   * for a revoked credential, which only {@link #leave}s. Never throws.
    */
   void decommission(RunnerSession session);
 

@@ -514,6 +514,7 @@ class RunnerRuntimeTest {
 
   @Test
   void theHostClosingRunnerDeletedDecommissionsAtOnce() throws Exception {
+    containerWithStateVolume();
     ackWith(1, 0);
     start("t", 10_000);
     host.await(Hello.class);
@@ -521,7 +522,8 @@ class RunnerRuntimeTest {
     host.closeSocket(RunnerWire.CLOSE_POLICY_VIOLATION, RunnerWire.CloseReason.RUNNER_DELETED);
     assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
     runner = null;
-    assertDecommissioned();
+    // Still the purge: the domain's stop, the client forgotten, the helper started.
+    assertHandedToTheHelper();
     assertEquals(1, host.upgrades.get(), "no redial");
   }
 
@@ -573,18 +575,43 @@ class RunnerRuntimeTest {
   }
 
   @Test
-  void aTokenEndpointThatKeepsRefusingTheClientIsReadAsDeletedAfterTheStreak() throws Exception {
+  void aTokenEndpointThatKeepsRefusingTheClientStopsTheRunnerAndRemovesNothing()
+      throws Exception {
     refusalConfirmMillis = 400;
+    // Every dial mints afresh, so the redial after the close below meets the refusal.
+    host.expiresIn = 0;
+    containerWithStateVolume();
+    // A workload and a volume of this runner's, as a live node carries them (qits-1592's loss).
+    docker.container("toy-item-a", Map.of(Toy.IDENTITY.ownerLabel(), "r1"));
+    docker.volume("qits-toy-runner-data-r1", Map.of(Toy.IDENTITY.ownerLabel(), "r1"));
+    // What a decommission would do with the held item, so a stray one shows as an rm.
+    domain.decommissioning =
+        session -> session.driver().remove("toy-item-a", Duration.ofSeconds(5));
+    holdAnItem();
+
+    // The runner's idp client is deleted: every mint from now on is invalid_client.
     host.tokenStatus = 401;
     host.tokenErrorBody =
         "{\"error\":\"invalid_client\",\"error_description\":\"client authentication failed\"}";
-    start("t", 10_000);
+    host.closeSocket(1000, "restarting");
 
     assertEquals(RunnerExit.OK, exit.get(15, TimeUnit.SECONDS));
     runner = null;
-    assertDecommissioned();
-    assertTrue(host.tokenBodies.size() >= 3, "a streak, not one answer: " + host.tokenBodies.size());
-    assertEquals(0, host.upgrades.get());
+    assertTrue(host.tokenBodies.size() >= 4, "a streak, not one answer: " + host.tokenBodies.size());
+    assertEquals(1, host.upgrades.get(), "no session after the refusals began");
+    // Stopped like a superseded retire: its exit is the container's last.
+    assertTrue(has(docker.calls(), List.of("update", "--restart=no", SELF)), docker.calls()::toString);
+    // And nothing removed: no domain stop, no helper, no rm, no volume rm, the client kept.
+    assertFalse(domain.events.contains("decommission"), domain.events::toString);
+    assertNoHelper();
+    assertTrue(
+        docker.calls().stream()
+            .noneMatch(c -> c.get(0).equals("rm") || c.get(0).equals("stop")),
+        docker.calls()::toString);
+    assertTrue(docker.containers().containsKey("toy-item-a"), docker.containers()::toString);
+    assertTrue(docker.volumes().containsKey("qits-toy-runner-data-r1"), docker.volumes()::toString);
+    // No work was taken while it was going.
+    assertEquals(1, host.all(Reserve.class).size());
   }
 
   @Test

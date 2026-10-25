@@ -388,10 +388,11 @@ class HarnessRunnerTest {
     assertEquals(Map.of(), docker.volumes(), said);
   }
 
-  // ---- 8. the two other ways a runner learns it was deleted ------------------------------------
+  // ---- 8. the other way a runner learns it was deleted, and the way it is merely refused --------
 
   @Test
   void aRunnerDeletedCloseDecommissionsAtOnce() throws Exception {
+    containerWithStateVolume();
     ackWith(2, 0);
     start("t");
     host.await(Hello.class);
@@ -402,11 +403,14 @@ class HarnessRunnerTest {
     assertFalse(Files.exists(state.resolve("client.json")));
     assertTrue(
         has(docker.calls(), List.of("update", "--restart=no", SELF)), docker.calls()::toString);
+    assertTrue(docker.calls().contains(HELPER_RUN), "the helper purges: " + docker.calls());
     assertEquals(1, host.upgrades.get(), "no redial");
   }
 
   @Test
-  void anInvalidClientStreakDecommissionsOnlyOnceItHasLastedItsTimeAndItsDials() throws Exception {
+  void anInvalidClientStreakStopsTheRunnerOnlyOnceItHasLastedItsTimeAndItsDials()
+      throws Exception {
+    containerWithStateVolume();
     host.tokenStatus = 401;
     host.tokenErrorBody = "{\"error\":\"invalid_client\"}";
 
@@ -419,7 +423,16 @@ class HarnessRunnerTest {
     assertEquals(RunnerExit.OK, exit.get(15, TimeUnit.SECONDS));
     runner = null;
     assertTrue(System.nanoTime() - began >= TimeUnit.MILLISECONDS.toNanos(2_000));
-    assertFalse(Files.exists(state.resolve("client.json")), "decommissioned");
+    // A revoked credential is not a deletion (qits-1592): it stays down, and removes nothing.
+    assertTrue(Files.exists(state.resolve("client.json")), "the client is kept");
+    assertTrue(
+        has(docker.calls(), List.of("update", "--restart=no", SELF)), docker.calls()::toString);
+    assertFalse(docker.calls().contains(HELPER_RUN), docker.calls()::toString);
+    assertTrue(
+        docker.calls().stream()
+            .noneMatch(
+                c -> c.get(0).equals("rm") || c.get(0).equals("stop") || c.contains("volume")),
+        docker.calls()::toString);
 
     // The time passes at once; the dials are slow, and three are not enough on their own.
     host.close();

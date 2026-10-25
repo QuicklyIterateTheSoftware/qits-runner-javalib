@@ -34,8 +34,8 @@ import org.jboss.logging.Logger;
  *
  * <pre>
  *   register (once) → bearer → log shipper → [ dial → onSessionStart → Hello → Ack{slots} →
- *   Backlog / Reserve / domain frames … → close ] until Retire, or until the platform says the
- *   runner was deleted
+ *   Backlog / Reserve / domain frames … → close ] until Retire, until the platform says the
+ *   runner was deleted, or until its credential is refused for good
  * </pre>
  *
  * <p><b>The toolkit handles the lifecycle frames; the domain handles its own.</b> {@code Ack},
@@ -44,9 +44,16 @@ import org.jboss.logging.Logger;
  * worker pool, because a domain's answers are docker calls that block.
  *
  * <p><b>A deleted runner decommissions itself</b>: told so by a {@code Retire} of kind {@code
- * DELETED} while connected, by a 1008 {@code RUNNER_DELETED} close, or by an {@code invalid_client}
- * streak on its dials. It takes no more work, lets the domain stop its own ({@link
+ * DELETED} while connected, or by a 1008 {@code RUNNER_DELETED} close — the platform's two explicit
+ * words, and the only two. It takes no more work, lets the domain stop its own ({@link
  * RunnerDomain#onDecommission}), hands the node half to its {@link NodeLifecycle}, and exits 0.
+ *
+ * <p><b>A runner whose credential is revoked only stops</b> (qits-1592): an {@code invalid_client}
+ * streak on its dials ({@link ControlSocket.Listener#onCredentialsRevoked}) says the idp no longer
+ * knows its client, not that the platform deleted the runner. It takes no more work, takes its own
+ * restart policy away and exits 0 — the way a superseded {@code Retire} leaves — and removes
+ * nothing: no {@link RunnerDomain#onDecommission}, no helper, no container, no volume, not even its
+ * {@code client.json}. Purging it takes an explicit retire.
  *
  * <p>A plain class with a plain constructor: {@link RunnerLauncher} builds it from the
  * environment, and a suite drives it against {@code FakeRunnerHost} and a script standing in for
@@ -113,8 +120,11 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   /** Set by the first {@code Ack}: predecessors and housekeeping are once per process. */
   private final AtomicBoolean acked = new AtomicBoolean();
 
-  /** Set once, by the first of the ways a runner learns it was deleted. */
-  private final AtomicBoolean decommissioning = new AtomicBoolean();
+  /**
+   * Set once, by the first of the ways a runner ends for good with no successor: learning it was
+   * deleted, or its credential being refused for good.
+   */
+  private final AtomicBoolean ending = new AtomicBoolean();
 
   /**
    * For this runner's own status only. The host answers every {@code Reserve} with {@code Nothing}
@@ -463,7 +473,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
                 } catch (RuntimeException e) {
                   LOG.warnf("%s's domain could not handle the Ack: %s", who, e.getMessage());
                 }
-                if (first && !decommissioning.get()) {
+                if (first && !ending.get()) {
                   lifecycle.firstAck();
                 }
               });
@@ -514,12 +524,50 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
   }
 
   /**
+   * The token endpoint refused this runner's client for a whole streak: the credential is revoked,
+   * which is not a deletion. On the loop, at once: not one more {@code Reserve}, no successor, no
+   * housekeeping — the socket has already stopped itself. Then, off the loop, the orderly exit a
+   * superseded {@code Retire} takes: the restart policy goes, so the exit is the container's last,
+   * and the process exits 0. Nothing is removed — not the domain's work, not a container, not a
+   * volume, not the client — because a revoked credential is not the platform's word that any of it
+   * may go; an explicit retire is.
+   */
+  @Override
+  public void onCredentialsRevoked(String why) {
+    if (!ending.compareAndSet(false, true)) {
+      return;
+    }
+    LOG.warnf(
+        "%s's credential was revoked (%s): it stops and removes nothing, no container and no"
+            + " volume; purging this runner takes an explicit retire (Retire DELETED)",
+        who, why);
+    ledger.drain();
+    // No successor and no housekeeping pass may start from here on.
+    lifecycle.halt();
+    ControlSocket<D> s = socket;
+    if (s != null) {
+      s.stop();
+    }
+    work(
+        () -> {
+          try {
+            lifecycle.leave();
+          } catch (RuntimeException e) {
+            LOG.warnf("%s could not take its restart policy away: %s", who, e.getMessage());
+          } finally {
+            LOG.infof("%s exits: credential revoked", who);
+            exit.complete(RunnerExit.OK);
+          }
+        });
+  }
+
+  /**
    * This runner was deleted. On the loop, at once: not one more {@code Reserve}, and no redial — the
    * host is about to close the socket, and a dial could only mint on a revoked client. Then, off the
    * loop: the domain stops and removes its own work, the node half runs, and the process exits 0.
    */
   private void decommission(String why) {
-    if (!decommissioning.compareAndSet(false, true)) {
+    if (!ending.compareAndSet(false, true)) {
       return;
     }
     LOG.warnf("%s decommissions itself: %s", who, why);
@@ -554,7 +602,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     // says which the host kept.
     ledger.suspend();
     lifecycle.poke();
-    if (!decommissioning.get()) {
+    if (!ending.get()) {
       work(
           () -> {
             try {

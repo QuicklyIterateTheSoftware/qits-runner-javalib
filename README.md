@@ -269,8 +269,9 @@ suite gets the same fixtures:
 
 Its ten cases are the whole life: register-once and a new token, client_secret_post, `Hello`/`Ack`,
 backlog/reserve/take/release, a lost socket and adoption, an upgrade waiting on quiescence, a
-deleted `Retire` and the helper's removal order, 1008 `RUNNER_DELETED` and the `invalid_client`
-streak, `health`, and the version probe. A copy of it is the right start for a new runner's suite.
+deleted `Retire` and the helper's removal order, 1008 `RUNNER_DELETED`, the `invalid_client`
+streak that stops the runner and removes nothing, `health`, and the version probe. A copy of it is
+the right start for a new runner's suite.
 
 ### The order the runtime calls the domain
 
@@ -279,9 +280,13 @@ Per session: `onSessionStart(session, carried)` (off the event loop, before the 
 settles the carried items, `onDropped(notAdopted)`, then counts the slots and calls `onAck`; every
 domain frame to `onMessage`, on a cached worker pool; `onSessionLost()` when the socket drops (held
 items become carried). On an `Upgrade`: drain, pull, digest check, poll `quiescent()`, start the
-successor, and leave on its `Retire{SUPERSEDED}`. On `Retire{DELETED}`, a 1008 `RUNNER_DELETED`
-close or a believed `invalid_client` streak: `onDecommission(session)` once, then `client.json` is
-deleted, the restart policy taken away, the helper started, exit 0.
+successor, and leave on its `Retire{SUPERSEDED}`. On `Retire{DELETED}` or a 1008 `RUNNER_DELETED`
+close — the platform's two explicit words — `onDecommission(session)` once, then `client.json` is
+deleted, the restart policy taken away, the helper started, exit 0. A believed `invalid_client`
+streak is **not** one of them (qits-1592): a revoked credential is not a deletion, so the runner
+drains, takes its restart policy away and exits 0 like a superseded retire, and removes nothing —
+no `onDecommission`, no helper, no container, no volume, not `client.json`; the domain is
+not called. Purging such a runner takes an explicit `Retire{DELETED}`.
 
 ### Environment, health and exit codes
 

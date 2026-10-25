@@ -24,7 +24,7 @@
          classpath of either published jar (AGENTS.md). -->
     <groupId>eu.wohlben.qits</groupId>
     <artifactId>qits-runner</artifactId>
-    <version>2026.1025.133207</version>
+    <version>2026.1025.135547</version>
     <packaging>pom</packaging>
     <name>qits-runner</name>
 

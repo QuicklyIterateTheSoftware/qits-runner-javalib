@@ -129,7 +129,7 @@ public final class FakeRunnerHost implements AutoCloseable {
         .put("clientId", identity.logName() + "-" + runnerId)
         .put("secret", "client-secret")
         .put("tokenUrl", base() + TOKEN_PATH)
-        .put("audience", identity.hostName())
+        .put("audience", "qits-platform")
         .put("socketUrl", "ws://127.0.0.1:" + server.actualPort() + SOCKET_PATH)
         .encode();
   }

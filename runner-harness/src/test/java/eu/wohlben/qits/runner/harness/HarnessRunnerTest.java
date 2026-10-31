@@ -145,7 +145,7 @@ class HarnessRunnerTest {
     assertTrue(form.startsWith("grant_type=client_credentials"), form);
     assertTrue(form.contains("client_id=harness-runner-r1"), form);
     assertTrue(form.contains("client_secret=client-secret"), form);
-    assertTrue(form.contains("audience=qits-harness"), form);
+    assertTrue(form.contains("audience=qits-platform"), form);
     assertTrue(
         host.tokenAuthorizations.stream().allMatch(a -> a == null),
         "no Authorization header, Basic or otherwise: " + host.tokenAuthorizations);

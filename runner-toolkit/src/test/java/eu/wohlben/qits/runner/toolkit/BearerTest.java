@@ -29,7 +29,7 @@ class BearerTest {
       AtomicLong now = new AtomicLong(1_000_000);
       ClientCredentials client =
           new ClientCredentials(
-              "ci-runner-r1", "client-secret", host.base() + "/token", "qits-ci",
+              "ci-runner-r1", "client-secret", host.base() + "/token", "qits-platform",
               "ws://127.0.0.1:1/ci/runner", "");
       Bearer bearer = new Bearer(new Http(vertx, 5_000), client, now::get);
 
@@ -38,7 +38,7 @@ class BearerTest {
       // the edge a remote runner mints through consumes one, and the idp then sees no client.
       assertEquals(
           "grant_type=client_credentials&client_id=ci-runner-r1&client_secret=client-secret"
-              + "&audience=qits-ci",
+              + "&audience=qits-platform",
           host.tokenBodies.getFirst());
       assertNull(host.tokenAuthorizations.getFirst(), "no Authorization header");
 

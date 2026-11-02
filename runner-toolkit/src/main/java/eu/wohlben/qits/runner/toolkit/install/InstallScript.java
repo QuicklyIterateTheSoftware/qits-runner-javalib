@@ -35,6 +35,13 @@ import java.util.regex.Pattern;
  * InstallScriptContractTest} runs the rendered script against a stub docker and compares the two
  * element for element — no fixture copy refreshed by hand in another repository.
  *
+ * <p><b>One line of the contract is a kind's opt-in.</b> {@code {{HOST_CGROUP}}} renders, for an
+ * identity that {@linkplain RunnerIdentity#readsHostCgroup() reads the host's cgroups} (the system
+ * runner, for qits-1818's OOM reporting), the read-only bind {@link
+ * RunnerIdentity#HOST_CGROUP_BIND} after the state volume — where a successor adds it too — and
+ * for every other identity nothing at all, not even a line, so their scripts render byte for byte
+ * as they did before.
+ *
  * <p><b>Every value lands inside single quotes</b> — in the line, and in the script's own
  * assignment — and in an argument of {@code docker}, so each is held to a charset that is literal
  * in all of them: no quote, backslash, whitespace, {@code $} or brace. A value outside it is refused
@@ -216,6 +223,9 @@ public final class InstallScript {
     script = fill(script, "STATE_DIR", identity.defaultStateDir());
     script = fill(script, "PAGE", page.name());
     script = fill(script, "TUNING", String.join(" ", tuning));
+    // A whole continuation line or nothing: an empty line would end the `set --` it sits in.
+    String hostCgroup = "    -v " + RunnerIdentity.HOST_CGROUP_BIND + " \\\n";
+    script = fill(script, "HOST_CGROUP", identity.readsHostCgroup() ? hostCgroup : "");
     if (script.contains("{{")) {
       throw new IllegalStateException(TEMPLATE + " has a placeholder nothing fills");
     }

@@ -148,6 +148,77 @@ class LifecycleArgvTest {
         argv);
   }
 
+  /**
+   * qits-1818: a runner that reads the host's cgroups gains the read-only bind at its self-update
+   * when its predecessor was installed without it — after the carried binds, before the mounts —
+   * and is never given it twice, whether the predecessor carries it as a bind or as a mount.
+   */
+  @Test
+  void aCgroupReadingSuccessorGainsTheHostCgroupBindOnce() {
+    List<String> binds =
+        List.of(
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "qits-system-runner-state-3f2a9c1e:/var/lib/qits-system-runner");
+    List<String> mounts = List.of("type=volume,source=x,target=/x");
+    List<String> gained =
+        LifecycleArgv.runSuccessor(
+            Shapes.SYSTEM, "docker", "r1", "2", "r/i:2", systemSelf(binds, mounts));
+    assertEquals(
+        List.of(
+            "docker", "run", "-d", "--name", "qits-system-runner-r1-2", "--restart",
+            "unless-stopped", "--label", "qits.system.runner.process=r1", "--label",
+            "qits.system.runner.version=2", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v",
+            "qits-system-runner-state-3f2a9c1e:/var/lib/qits-system-runner", "-v",
+            "/sys/fs/cgroup:/qits/host-cgroup:ro", "--mount", "type=volume,source=x,target=/x",
+            "r/i:2"),
+        gained);
+
+    List<String> withBind = new java.util.ArrayList<>(binds);
+    withBind.add(LifecycleArgv.HOST_CGROUP_BIND);
+    List<String> kept =
+        LifecycleArgv.runSuccessor(
+            Shapes.SYSTEM, "docker", "r1", "2", "r/i:2", systemSelf(withBind, mounts));
+    assertEquals(gained, kept, "a predecessor that has the bind hands it on as it is, once");
+
+    List<String> asMount =
+        LifecycleArgv.runSuccessor(
+            Shapes.SYSTEM,
+            "docker",
+            "r1",
+            "2",
+            "r/i:2",
+            systemSelf(binds, List.of("type=bind,source=/sys/fs/cgroup,target=/qits/host-cgroup")));
+    assertFalse(
+        asMount.contains(LifecycleArgv.HOST_CGROUP_BIND),
+        "a mount already on " + LifecycleArgv.HOST_CGROUP + " got a second one: " + asMount);
+  }
+
+  @Test
+  void aRunnerThatDoesNotReadTheHostCgroupsIsNeverGivenTheBind() {
+    for (RunnerIdentity other : List.of(CI, Shapes.WORKSPACES, Toy.IDENTITY)) {
+      List<String> argv =
+          LifecycleArgv.runSuccessor(other, "docker", "r1", "2", "r/i:2", self(Map.of()));
+      assertTrue(argv.stream().noneMatch(a -> a.contains("cgroup")), argv.toString());
+    }
+    List<String> helper =
+        LifecycleArgv.runDecommissioner(Shapes.SYSTEM, "docker", "r1", "sha256:i", null, List.of());
+    assertTrue(
+        helper.stream().noneMatch(a -> a.contains("cgroup")),
+        "the decommission helper needs the socket only: " + helper);
+  }
+
+  private static SelfSpec systemSelf(List<String> binds, List<String> mounts) {
+    return new SelfSpec(
+        "0123456789ab",
+        "sha256:old",
+        Map.of(),
+        Map.of("qits.system.runner.process", "r1", "qits.system.runner.version", "1"),
+        binds,
+        mounts,
+        "unless-stopped",
+        "default");
+  }
+
   @Test
   void aVersionOutsideItsCharsetNamesNoContainer() {
     assertThrows(

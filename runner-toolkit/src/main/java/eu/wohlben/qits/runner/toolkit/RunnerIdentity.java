@@ -73,6 +73,16 @@ public record RunnerIdentity(
   /** Where the runner id goes in {@link #registerPath}. */
   public static final String ID_PLACEHOLDER = "{id}";
 
+  /**
+   * Where a runner that {@link #readsHostCgroup()} finds the node's cgroup v2 tree inside its
+   * container; {@code LifecycleArgv.HOST_CGROUP} is the same value. Declared here, not there, so
+   * the install package a server links refers to nothing beyond this class.
+   */
+  public static final String HOST_CGROUP = "/qits/host-cgroup";
+
+  /** The read-only bind, as {@code -v} and {@code HostConfig.Binds} both spell it. */
+  public static final String HOST_CGROUP_BIND = "/sys/fs/cgroup:" + HOST_CGROUP + ":ro";
+
   /** The label root qits-containers-service owns; no runner's may be it or sit under it. */
   static final String CONTAINERS_LABEL_ROOT = "qits.containers";
 
@@ -249,6 +259,24 @@ public record RunnerIdentity(
   /** The host service this runner registers with, as a person names it: {@code qits-<kind>}. */
   public String hostName() {
     return "qits-" + kind;
+  }
+
+  /**
+   * Whether this runner's container binds the node's cgroup v2 tree read-only at {@link
+   * LifecycleArgv#HOST_CGROUP} — {@link KnownRunnerNamespaces#HOST_CGROUP_READERS} lists the kinds
+   * that do, by their roots. With docker's private cgroup namespace a container's own {@code
+   * /sys/fs/cgroup} is its own cgroup only, so a runner that samples the node's and its workloads'
+   * memory counters (qits-1818's OOM reporting) needs the host's tree under a path of its own. The
+   * install script renders the bind and a self-update adds it to a successor whose predecessor
+   * lacks it; for every other runner the container contract is unchanged.
+   */
+  public boolean readsHostCgroup() {
+    for (KnownRunnerNamespaces.Root root : KnownRunnerNamespaces.HOST_CGROUP_READERS) {
+      if (root.matches(this)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void require(String what, String value, Pattern pattern) {

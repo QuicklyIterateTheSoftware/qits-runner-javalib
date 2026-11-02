@@ -31,6 +31,17 @@ public final class LifecycleArgv {
   /** The host docker socket, on both sides of the bind — a constant, never a caller's path. */
   public static final String DOCKER_SOCKET = "/var/run/docker.sock";
 
+  /**
+   * Where a runner that {@linkplain RunnerIdentity#readsHostCgroup() reads the host's cgroups}
+   * finds the node's cgroup v2 tree inside its container — a path of its own, because its {@code
+   * /sys/fs/cgroup} is its own cgroup under docker's private cgroup namespace. What
+   * qits-system-runner-daemon samples {@code memory.events}/{@code memory.peak} under (qits-1818).
+   */
+  public static final String HOST_CGROUP = RunnerIdentity.HOST_CGROUP;
+
+  /** The bind itself — {@link RunnerIdentity#HOST_CGROUP_BIND}. */
+  public static final String HOST_CGROUP_BIND = RunnerIdentity.HOST_CGROUP_BIND;
+
   /** Set on the decommission helper, to the runner id it removes: {@code <envPrefix>DECOMMISSION}. */
   public static final String DECOMMISSION = RunnerLauncher.DECOMMISSION;
 
@@ -169,6 +180,10 @@ public final class LifecycleArgv {
    * <ul>
    *   <li>The restart policy and the mounts are carried as they are — the docker socket and the
    *       state volume holding {@code client.json}, and whatever an operator added.
+   *   <li>A runner that {@linkplain RunnerIdentity#readsHostCgroup() reads the host's cgroups} gets
+   *       {@link #HOST_CGROUP_BIND} after the carried binds when no carried bind or mount already
+   *       lands on {@link #HOST_CGROUP} — so a target installed before qits-1818 gains it at its
+   *       next self-update, with no reinstall, and one that has it is not given it twice.
    *   <li>The network is carried only when it is not docker's default bridge.
    *   <li>The environment is the one the container was <em>given</em> ({@link SelfSpec} subtracts
    *       the image's), and never {@code <envPrefix>REGISTRATION_TOKEN}: a successor starts
@@ -217,6 +232,10 @@ public final class LifecycleArgv {
     for (String bind : self.binds()) {
       argv.add("-v");
       argv.add(oneLine("bind", bind));
+    }
+    if (identity.readsHostCgroup() && !landsAt(self, HOST_CGROUP)) {
+      argv.add("-v");
+      argv.add(HOST_CGROUP_BIND);
     }
     for (String mount : self.mounts()) {
       argv.add("--mount");
@@ -430,6 +449,27 @@ public final class LifecycleArgv {
       throw new IllegalArgumentException("invalid " + what + ": '" + value + "'");
     }
     return value;
+  }
+
+  /**
+   * Whether one of the container's binds ({@code source:target[:options]}) or mounts ({@code
+   * …,target=<target>,…}) already lands on {@code target}: docker refuses a second mount there.
+   */
+  static boolean landsAt(SelfSpec self, String target) {
+    for (String bind : self.binds()) {
+      String[] parts = bind.split(":", -1);
+      if (parts.length >= 2 && parts[1].equals(target)) {
+        return true;
+      }
+    }
+    for (String mount : self.mounts()) {
+      for (String option : mount.split(",")) {
+        if (option.equals("target=" + target)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private static String oneLine(String what, String value) {

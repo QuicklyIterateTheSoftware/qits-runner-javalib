@@ -73,5 +73,14 @@ public final class KnownRunnerNamespaces {
   /** Every kind on the estate. */
   public static final List<Root> ALL = List.of(CI, WORKSPACES, PROJECTS_DESK, HARNESS, SYSTEM);
 
+  /**
+   * The kinds whose runner container reads the node's cgroup v2 tree, read-only ({@link
+   * RunnerIdentity#readsHostCgroup()}): only {@link #SYSTEM}, which samples the node's and each
+   * lease container's {@code memory.events} and {@code memory.peak} so a target reports its OOM
+   * kills (qits-1818). Opt-in by kind, not by default: no other runner has a use for the host's
+   * cgroups, and a kind not listed here starts exactly the container it always did.
+   */
+  public static final List<Root> HOST_CGROUP_READERS = List.of(SYSTEM);
+
   private KnownRunnerNamespaces() {}
 }

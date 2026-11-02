@@ -3,6 +3,8 @@ package eu.wohlben.qits.runner.toolkit.install;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.HARNESS;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.HARNESS_PAGE;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.REGISTRY;
+import static eu.wohlben.qits.runner.toolkit.install.Identities.SYSTEM;
+import static eu.wohlben.qits.runner.toolkit.install.Identities.SYSTEM_PAGE;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.VERSION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -60,6 +62,11 @@ import org.junit.jupiter.api.io.TempDir;
  *   <li>The registration token appears in no line it prints and in no docker argv; it reaches docker
  *       only on the login's stdin and in the environment of the {@code run}.
  * </ol>
+ *
+ * <p>A kind that {@linkplain eu.wohlben.qits.runner.toolkit.RunnerIdentity#readsHostCgroup() reads
+ * the host's cgroups} (the system runner, qits-1818) has one bind more, {@link
+ * LifecycleArgv#HOST_CGROUP_BIND}, after the state volume — and a successor of a container
+ * installed before the bind existed gains it there, so the two still compare element for element.
  */
 @EnabledOnOs(OS.LINUX)
 class InstallScriptContractTest {
@@ -115,10 +122,7 @@ class InstallScriptContractTest {
   @BeforeEach
   void stubDocker() throws IOException {
     stubs = Files.createDirectories(work.resolve("stubs"));
-    Path docker = stubs.resolve("docker");
-    Files.writeString(
-        docker, "#!/bin/sh\nW='" + work + "'\nP='" + PREFIX + "'\n" + STUB, StandardCharsets.UTF_8);
-    Files.setPosixFilePermissions(docker, PosixFilePermissions.fromString("rwxr-xr-x"));
+    writeStub(PREFIX);
     script = work.resolve("runner-install.sh");
     Files.writeString(script, InstallScript.script(HARNESS, HARNESS_PAGE, REGISTRY));
     token = "qits_tok_CONTRACT-" + ProcessHandle.current().pid() + "-DO-NOT-PRINT";
@@ -308,6 +312,91 @@ class InstallScriptContractTest {
   }
 
   /**
+   * qits-1818: the system runner's install binds the node's cgroup tree read-only after the state
+   * volume, and a target installed before that — its container has the two binds only — rolls over
+   * into exactly the same container, the bind added once; one that has it is not given it twice.
+   */
+  @Test
+  void anOptedInRunnerBindsTheHostCgroupTreeAndAnOlderInstallsSuccessorGainsItOnce()
+      throws Exception {
+    String prefix = SYSTEM.envPrefix();
+    String image = REGISTRY + "/qits/qits-system-runner:" + VERSION;
+    String volume = "qits-system-runner-state-" + ID8;
+    String stateDir = SYSTEM.defaultStateDir();
+    writeStub(prefix);
+    Files.writeString(script, InstallScript.script(SYSTEM, SYSTEM_PAGE, REGISTRY));
+
+    Ran ran =
+        sh(
+            List.of("sh"),
+            Map.of(
+                prefix + "URL", URL_VALUE,
+                prefix + "ID", ID_VALUE,
+                prefix + "REGISTRATION_TOKEN", token,
+                prefix + "SLOTS", SLOTS_VALUE),
+            script);
+
+    assertEquals(0, ran.exit(), ran.output());
+    List<String> run = lines("run-argv");
+    assertEquals(
+        List.of(
+            "run",
+            "-d",
+            "--name",
+            "qits-system-runner-" + ID8 + "-" + VERSION,
+            "--restart",
+            "unless-stopped",
+            "--label",
+            "qits.system.runner.process=" + ID_VALUE,
+            "--label",
+            "qits.system.runner.version=" + VERSION,
+            "-v",
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "-v",
+            volume + ":" + stateDir,
+            "-v",
+            "/sys/fs/cgroup:/qits/host-cgroup:ro",
+            "-e",
+            prefix + "ID=" + ID_VALUE,
+            "-e",
+            prefix + "SLOTS=" + SLOTS_VALUE,
+            "-e",
+            prefix + "URL=" + URL_VALUE,
+            "-e",
+            prefix + "REGISTRATION_TOKEN",
+            image),
+        run,
+        "the system runner's docker run is not the container contract with the cgroup bind");
+
+    List<String> before =
+        List.of("/var/run/docker.sock:/var/run/docker.sock", volume + ":" + stateDir);
+    List<String> after = new ArrayList<>(before);
+    after.add(LifecycleArgv.HOST_CGROUP_BIND);
+    for (List<String> binds : List.of(before, after)) {
+      SelfSpec self =
+          new SelfSpec(
+              "4f6c1e0b2a9d",
+              "sha256:fixture",
+              Map.of(
+                  prefix + "URL", URL_VALUE,
+                  prefix + "ID", ID_VALUE,
+                  prefix + "SLOTS", SLOTS_VALUE),
+              Map.of(
+                  "qits.system.runner.process", ID_VALUE,
+                  "qits.system.runner.version", "0.0.0-older"),
+              binds,
+              List.of(),
+              "unless-stopped",
+              "bridge");
+      assertEquals(
+          withInstallToken(
+              LifecycleArgv.runSuccessor(SYSTEM, "docker", ID_VALUE, VERSION, image, self), prefix),
+          run,
+          "the install and a successor of a container with " + binds + " differ");
+    }
+  }
+
+  /**
    * What {@link LifecycleArgv#runSuccessor} starts in place of the container the install script
    * started — read from a {@code docker inspect} of exactly that container (the fixture beside this
    * class: the four values, the two labels, the two binds, {@code unless-stopped}, the default
@@ -317,11 +406,15 @@ class InstallScriptContractTest {
   private static List<String> successorOfTheInstalledContainer() throws IOException {
     SelfSpec self =
         SelfSpec.parse(resource("harness-runner.inspect.json"), resource("harness-runner.image-inspect.json"));
-    List<String> successor =
-        LifecycleArgv.runSuccessor(HARNESS, "docker", ID_VALUE, VERSION, IMAGE, self);
+    return withInstallToken(
+        LifecycleArgv.runSuccessor(HARNESS, "docker", ID_VALUE, VERSION, IMAGE, self), PREFIX);
+  }
+
+  /** A successor's argv as the stub records an install's: no binary, plus the token's -e NAME. */
+  private static List<String> withInstallToken(List<String> successor, String prefix) {
     List<String> expected = new ArrayList<>(successor.subList(1, successor.size() - 1));
     expected.add("-e");
-    expected.add(PREFIX + "REGISTRATION_TOKEN");
+    expected.add(prefix + "REGISTRATION_TOKEN");
     expected.add(successor.getLast());
     return expected;
   }
@@ -363,6 +456,14 @@ class InstallScriptContractTest {
     String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
     assertTrue(process.waitFor(60, TimeUnit.SECONDS), "the script did not finish");
     return new Ran(process.exitValue(), output);
+  }
+
+  /** The stub docker, recording the run's environment under {@code prefix}. */
+  private void writeStub(String prefix) throws IOException {
+    Path docker = stubs.resolve("docker");
+    Files.writeString(
+        docker, "#!/bin/sh\nW='" + work + "'\nP='" + prefix + "'\n" + STUB, StandardCharsets.UTF_8);
+    Files.setPosixFilePermissions(docker, PosixFilePermissions.fromString("rwxr-xr-x"));
   }
 
   private void reset() throws IOException {

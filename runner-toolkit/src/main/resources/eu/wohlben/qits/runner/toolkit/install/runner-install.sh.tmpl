@@ -113,7 +113,7 @@ main() {
     --label "{{LABEL_ROOT}}.version=$version" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$volume:{{STATE_DIR}}" \
-    -e "{{ENV_PREFIX}}ID=${{ENV_PREFIX}}ID" \
+{{HOST_CGROUP}}    -e "{{ENV_PREFIX}}ID=${{ENV_PREFIX}}ID" \
     -e "{{ENV_PREFIX}}SLOTS=${{ENV_PREFIX}}SLOTS" \
     -e "{{ENV_PREFIX}}URL=${{ENV_PREFIX}}URL" \
     -e {{ENV_PREFIX}}REGISTRATION_TOKEN

@@ -3,6 +3,8 @@ package eu.wohlben.qits.runner.toolkit.install;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.HARNESS;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.HARNESS_PAGE;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.REGISTRY;
+import static eu.wohlben.qits.runner.toolkit.install.Identities.SYSTEM;
+import static eu.wohlben.qits.runner.toolkit.install.Identities.SYSTEM_PAGE;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.WORKSPACES;
 import static eu.wohlben.qits.runner.toolkit.install.Identities.WORKSPACES_PAGE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -94,7 +96,8 @@ class InstallScriptTest {
     String template = template();
     for (String placeholder :
         List.of(
-            "IMAGE", "ENV_PREFIX", "NAME_PREFIX", "LABEL_ROOT", "STATE_DIR", "PAGE", "TUNING")) {
+            "IMAGE", "ENV_PREFIX", "NAME_PREFIX", "LABEL_ROOT", "STATE_DIR", "PAGE", "TUNING",
+            "HOST_CGROUP")) {
       String marker = "{{" + placeholder + "}}";
       assertTrue(template.contains(marker), marker);
       String without = template.replace(marker, "x");
@@ -228,6 +231,39 @@ class InstallScriptTest {
 
     assertParses(script);
     assertParses(line);
+  }
+
+  /**
+   * qits-1818: the system runner — and only it — binds the node's cgroup v2 tree read-only, as one
+   * continuation line right after the state volume; every other kind's {@code docker run} goes
+   * from the state volume straight to its environment, as it did before the opt-in existed.
+   */
+  @Test
+  void onlyTheSystemRunnerBindsTheHostCgroupTree(@TempDir Path dir) throws Exception {
+    String system = InstallScript.script(SYSTEM, SYSTEM_PAGE, REGISTRY);
+    assertTrue(
+        system.contains(
+            "    -v \"$volume:/var/lib/qits-system-runner\" \\\n"
+                + "    -v /sys/fs/cgroup:/qits/host-cgroup:ro \\\n"
+                + "    -e \"QITS_SYSTEM_RUNNER_ID=$QITS_SYSTEM_RUNNER_ID\" \\\n"),
+        system);
+    assertEquals(1, occurrences(system, "/sys/fs/cgroup"), system);
+    Path file = dir.resolve("system-install.sh");
+    Files.writeString(file, system);
+    assertParses(file);
+
+    for (RunnerIdentity other : List.of(HARNESS, WORKSPACES)) {
+      String script = InstallScript.script(other, HARNESS_PAGE, REGISTRY);
+      assertFalse(script.contains("cgroup"), script);
+      assertTrue(
+          script.contains(
+              "    -v \"$volume:"
+                  + other.defaultStateDir()
+                  + "\" \\\n    -e \""
+                  + other.envPrefix()
+                  + "ID="),
+          script);
+    }
   }
 
   @Test

@@ -1,6 +1,7 @@
 package eu.wohlben.qits.runner.toolkit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -253,6 +254,21 @@ class RunnerIdentityTest {
     RunnerIdentity deskIdentity =
         identity(desk.kind(), desk.envPrefix(), desk.labelRoot(), desk.namePrefix());
     assertTrue(desk.matches(deskIdentity), "the projects-desk-shaped identity has PROJECTS_DESK's roots");
+  }
+
+  /** qits-1818: the system runner, and no other kind, reads the node's cgroup tree. */
+  @Test
+  void onlyTheSystemRunnerReadsTheHostCgroups() {
+    assertEquals(List.of(KnownRunnerNamespaces.SYSTEM), KnownRunnerNamespaces.HOST_CGROUP_READERS);
+    assertTrue(Shapes.SYSTEM.readsHostCgroup());
+    for (KnownRunnerNamespaces.Root root : KnownRunnerNamespaces.ALL) {
+      RunnerIdentity shaped =
+          identity(root.kind(), root.envPrefix(), root.labelRoot(), root.namePrefix());
+      assertEquals(root == KnownRunnerNamespaces.SYSTEM, shaped.readsHostCgroup(), root.kind());
+    }
+    assertFalse(Shapes.CI.readsHostCgroup());
+    assertFalse(Shapes.WORKSPACES.readsHostCgroup());
+    assertFalse(Toy.IDENTITY.readsHostCgroup());
   }
 
   @Test

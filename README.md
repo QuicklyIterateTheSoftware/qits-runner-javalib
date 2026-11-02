@@ -422,6 +422,17 @@ rotation path), and starts the runner on the default bridge — never `qits-net`
 and the toolkit's successor argv (`LifecycleArgv.runSuccessor`) are one contract, asserted together
 by `InstallScriptContractTest`, so they cannot drift.
 
+**The host cgroup bind is a kind's opt-in** (qits-1818). A runner whose roots are listed in
+`KnownRunnerNamespaces.HOST_CGROUP_READERS` (`RunnerIdentity.readsHostCgroup()`) — today only
+`SYSTEM`, the target runner — also gets `-v /sys/fs/cgroup:/qits/host-cgroup:ro`
+(`LifecycleArgv.HOST_CGROUP_BIND`) after the state volume: under docker's private cgroup namespace
+its own `/sys/fs/cgroup` is only its own cgroup, and qits-system-runner-daemon reads the node's and
+each lease container's `memory.events`/`memory.peak` under `LifecycleArgv.HOST_CGROUP` to report
+OOM kills. The install script renders it for that kind only (every other kind's script is byte for
+byte what it was), and `runSuccessor` adds it when the predecessor's binds and mounts have nothing
+at `/qits/host-cgroup`, so a target installed earlier gains it at its next self-update without a
+reinstall. The decommission helper never gets it: it needs the socket only.
+
 ## Rules for changing the protocol
 
 **The frozen frames.** `Upgrade{version, image, sha256}` and `Retire{reason, kind}` are what every

@@ -54,7 +54,7 @@
              adding that one module in test scope; and the two register hosts' recordings, test
              scope only, since an embedder supplies its own host's. Released calvers, moved only by
              the maintenance dependencies bump — never by hand. -->
-        <qits.pact-consumer.version>2026.1019.82625</qits.pact-consumer.version>
+        <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
         <qits.idp-golden-masters.version>2026.1027.165632</qits.idp-golden-masters.version>
         <qits.observability-golden-masters.version>2026.1018.155850</qits.observability-golden-masters.version>
         <qits.workspaces-golden-masters.version>2026.1102.193613</qits.workspaces-golden-masters.version>

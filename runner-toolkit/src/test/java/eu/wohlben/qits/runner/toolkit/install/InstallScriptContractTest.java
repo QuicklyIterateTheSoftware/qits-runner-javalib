@@ -130,14 +130,27 @@ class InstallScriptContractTest {
   }
 
   @Test
-  void theGenericScriptParsesAndCarriesNoTokenNoPlaceholderAndNoSystemd() throws Exception {
+  void theGenericScriptParsesAndCarriesNoTokenNoPlaceholder() throws Exception {
     String text = Files.readString(script);
 
     assertEquals(0, sh(List.of("sh", "-n", script.toString()), Map.of(), null).exit());
     assertFalse(text.contains("qits_tok_"), "the generic script carries a token");
     assertFalse(text.contains("{{"), "the generic script has a placeholder nothing filled");
-    assertFalse(text.toLowerCase().contains("systemctl"), "the script still speaks systemd");
-    assertFalse(text.toLowerCase().contains("systemd"), "the script still speaks systemd");
+  }
+
+  /**
+   * qits-1977: {@code join_network} is the one place the script speaks systemd at all — it is the
+   * gate for whether a node may join the private network, not something the runner install itself
+   * (docker login, pull, run) ever touches.
+   */
+  @Test
+  void onlyJoinNetworkSpeaksSystemd() throws Exception {
+    String text = Files.readString(script);
+    String beforeJoinNetwork = text.substring(0, text.indexOf("join_network() {"));
+    String afterJoinNetwork = text.substring(text.indexOf("\n}\n", text.indexOf("join_network() {")));
+
+    assertFalse(beforeJoinNetwork.toLowerCase().contains("systemd"), beforeJoinNetwork);
+    assertFalse(afterJoinNetwork.toLowerCase().contains("systemd"), afterJoinNetwork);
   }
 
   @Test

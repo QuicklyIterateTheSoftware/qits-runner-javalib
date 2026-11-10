@@ -77,8 +77,9 @@ class InstallScriptTest {
             "QITS_CI_RUNNER_", "qits-ci-runner", "qits.ci.runner", "/var/lib/qits-ci-runner", "CI UI")) {
       assertFalse(script.contains(ci), ci);
     }
-    assertFalse(script.contains("systemctl"), script);
-    assertFalse(script.contains("systemd"), script);
+    // qits-1977: join_network is the only place the script speaks systemd at all.
+    assertEquals(1, occurrences(script, "systemctl"), script);
+    assertTrue(script.contains("command -v systemctl"), script);
     // Everything runs from the last line, so a download cut short runs nothing.
     assertTrue(script.endsWith("\nmain \"$@\"\n"), script);
 
@@ -217,6 +218,60 @@ class InstallScriptTest {
     }
   }
 
+  /** qits-1977: an empty URL is the default every pre-existing renderer still gets. */
+  @Test
+  void anEmptyNetworkAccessUrlRendersAJoinThatReturnsAtOnce() {
+    String script = InstallScript.script(WORKSPACES, WORKSPACES_PAGE, REGISTRY);
+
+    assertFalse(script.contains("{{"), script);
+    assertTrue(script.contains("join_network() {\n  url=''\n  [ -n \"$url\" ] || return 0\n"), script);
+
+    // The 3-arg overload and the 4-arg overload with an explicit "" render identically.
+    assertEquals(
+        script, InstallScript.script(WORKSPACES, WORKSPACES_PAGE, REGISTRY, ""));
+  }
+
+  @Test
+  void aSetNetworkAccessUrlAppearsInTheJoin() {
+    String url = "https://network-access.qits.example.org";
+    String script = InstallScript.script(WORKSPACES, WORKSPACES_PAGE, REGISTRY, url);
+
+    assertFalse(script.contains("{{"), script);
+    assertTrue(script.contains("url='" + url + "'"), script);
+    assertTrue(
+        script.contains(
+            "curl -fsSL -H \"Authorization: Bearer ${QITS_WORKSPACES_RUNNER_REGISTRATION_TOKEN}\""
+                + " \\\n      \"$url/api/nodes/qits-node-tunnel\" -o \"$bin.new\""),
+        script);
+    assertTrue(
+        script.contains(
+            "\"$bin\" join --url \"$url\" --target \"${QITS_WORKSPACES_RUNNER_ID}\""
+                + " --name \"$(hostname -s)\""),
+        script);
+    // The token goes only in a header and an env assignment, never in the docker run argv.
+    assertFalse(script.contains("--target \"$QITS_WORKSPACES_RUNNER_REGISTRATION_TOKEN\""), script);
+  }
+
+  @Test
+  void aNetworkAccessUrlTheScriptCannotCarryIsRefused() {
+    for (String url :
+        List.of(
+            "http://network-access.qits.example.org",
+            "https://host/{{X}}",
+            "https://host'; rm -rf /",
+            "ftp://host",
+            "https://host?x=1",
+            " https://host")) {
+      assertThrows(
+          IllegalStateException.class,
+          () -> InstallScript.script(WORKSPACES, WORKSPACES_PAGE, REGISTRY, url),
+          () -> "network access url " + url);
+    }
+    // A well-shaped one, with a port and a path, is accepted.
+    InstallScript.script(
+        WORKSPACES, WORKSPACES_PAGE, REGISTRY, "https://network-access.example.org:8443/api");
+  }
+
   @Test
   void theRenderedScriptParses(@TempDir Path dir) throws Exception {
     Path script = dir.resolve("runner-install.sh");
@@ -231,6 +286,17 @@ class InstallScriptTest {
 
     assertParses(script);
     assertParses(line);
+  }
+
+  @Test
+  void theRenderedScriptWithAJoinUrlAlsoParses(@TempDir Path dir) throws Exception {
+    Path script = dir.resolve("runner-install-joined.sh");
+    Files.writeString(
+        script,
+        InstallScript.script(
+            HARNESS, HARNESS_PAGE, REGISTRY, "https://network-access.qits.example.org"));
+
+    assertParses(script);
   }
 
   /**

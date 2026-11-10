@@ -63,6 +63,14 @@ public final class InstallScript {
   private static final Pattern URL =
       Pattern.compile("https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?");
 
+  /**
+   * {@code {{NETWORK_ACCESS_URL}}} (qits-1977): empty means "no join", and a non-empty value must
+   * be this exact shape — qits-network-access-service's own base, never a path a query or a
+   * fragment could smuggle a shell metacharacter past {@code join_network}'s single quotes.
+   */
+  private static final Pattern NETWORK_ACCESS_URL =
+      Pattern.compile("https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?");
+
   /** {@code qits_tok_} plus base64 or base64url, and nothing a quote or a line could trip on. */
   private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9._~+/=-]{1,1024}");
 
@@ -142,7 +150,22 @@ public final class InstallScript {
    *     carried, or the template has a placeholder nothing fills
    */
   public static String script(RunnerIdentity identity, InstallPage page, String registryHost) {
-    return render(TEXT, identity, page, registryHost);
+    return script(identity, page, registryHost, "");
+  }
+
+  /**
+   * {@link #script(RunnerIdentity, InstallPage, String)}, additionally filling {@code
+   * {{NETWORK_ACCESS_URL}}} (qits-1977) with {@code networkAccessUrl} — qits-network-access-
+   * service's base, or {@code ""} for "this kind of node does not join the private network",
+   * exactly what every caller before this overload existed still gets.
+   *
+   * @throws IllegalStateException when {@code networkAccessUrl} is non-empty and not a bare
+   *     {@code https://host[:port][/path]}, in addition to every reason {@link
+   *     #script(RunnerIdentity, InstallPage, String)} throws
+   */
+  public static String script(
+      RunnerIdentity identity, InstallPage page, String registryHost, String networkAccessUrl) {
+    return render(TEXT, identity, page, registryHost, networkAccessUrl);
   }
 
   /**
@@ -205,8 +228,22 @@ public final class InstallScript {
   /** {@link #script} over any template text — the seam the template's own belts are tested at. */
   static String render(
       String template, RunnerIdentity identity, InstallPage page, String registryHost) {
+    return render(template, identity, page, registryHost, "");
+  }
+
+  /** {@link #render(String, RunnerIdentity, InstallPage, String)}, with the network-access URL. */
+  static String render(
+      String template,
+      RunnerIdentity identity,
+      InstallPage page,
+      String registryHost,
+      String networkAccessUrl) {
     require(REGISTRY, registryHost, "the registry host");
     require(VERSION, identity.version(), "the runner version");
+    networkAccessUrl = networkAccessUrl == null ? "" : networkAccessUrl;
+    if (!networkAccessUrl.isEmpty()) {
+      require(NETWORK_ACCESS_URL, networkAccessUrl, "the network-access URL");
+    }
     List<String> tuning = new ArrayList<>();
     for (String variable : new LinkedHashSet<>(concat(BASE_TUNING, page.tuning()))) {
       tuning.add(identity.env(variable));
@@ -223,6 +260,7 @@ public final class InstallScript {
     script = fill(script, "STATE_DIR", identity.defaultStateDir());
     script = fill(script, "PAGE", page.name());
     script = fill(script, "TUNING", String.join(" ", tuning));
+    script = fill(script, "NETWORK_ACCESS_URL", networkAccessUrl);
     // A whole continuation line or nothing: an empty line would end the `set --` it sits in.
     String hostCgroup = "    -v " + RunnerIdentity.HOST_CGROUP_BIND + " \\\n";
     script = fill(script, "HOST_CGROUP", identity.readsHostCgroup() ? hostCgroup : "");

@@ -21,14 +21,16 @@
 #
 #   1. refuses, one sentence each, when a value is missing or carries a character this script will
 #      not hand to docker, or when docker does not answer;
-#   2. logs in to the platform's registry with the registration token, in a throwaway docker config
+#   2. best effort, and only when the server named a network to join: joins the platform's private
+#      network as a WireGuard peer (qits-1977), while the registration token still works;
+#   3. logs in to the platform's registry with the registration token, in a throwaway docker config
 #      that is deleted right after, and pulls the runner image — the host's own docker config is
 #      never written;
-#   3. removes every container of this runner (label {{LABEL_ROOT}}.process=<id>) — a re-run
+#   4. removes every container of this runner (label {{LABEL_ROOT}}.process=<id>) — a re-run
 #      REPLACES the runner, and a re-run with a new token is how a registration is rotated;
-#   4. keeps the runner's state volume but removes client.json from it, so the token it was just
+#   5. keeps the runner's state volume but removes client.json from it, so the token it was just
 #      given is the one the runner registers with;
-#   5. starts the runner container, and prints how to watch it.
+#   6. starts the runner container, and prints how to watch it.
 #
 # The registration token appears in no line this script prints and in no command line: the login
 # reads it on stdin, and the container gets it as `-e {{ENV_PREFIX}}REGISTRATION_TOKEN`, docker's
@@ -47,6 +49,31 @@ require() { # $1 = name, $2 = value
   case "$2" in
     *[!A-Za-z0-9._~+/=:-]*) refuse "$1 carries a character this script will not hand to docker." ;;
   esac
+}
+
+# The node joins the platform's private network as a WireGuard peer (qits-1977): a host-level
+# userspace tunnel to the private edge only, and split DNS for the platform's zone. It is best
+# effort: a node that cannot join still runs its runner, and reaches the platform publicly.
+join_network() {
+  url='{{NETWORK_ACCESS_URL}}'
+  [ -n "$url" ] || return 0
+  if [ "$(id -u)" != 0 ]; then
+    echo "warning: not root, so this node does not join the private network; rerun the line with sudo." >&2
+    return 0
+  fi
+  command -v systemctl >/dev/null 2>&1 \
+    || { echo "warning: no systemd, so this node does not join the private network." >&2; return 0; }
+  bin=/usr/local/bin/qits-node-tunnel
+  if ! curl -fsSL -H "Authorization: Bearer ${{{ENV_PREFIX}}REGISTRATION_TOKEN}" \
+      "$url/api/nodes/qits-node-tunnel" -o "$bin.new"; then
+    rm -f "$bin.new"
+    echo "warning: could not download qits-node-tunnel from $url; the node does not join." >&2
+    return 0
+  fi
+  chmod 0755 "$bin.new" && mv -f "$bin.new" "$bin"
+  QITS_SYSTEM_RUNNER_REGISTRATION_TOKEN="${{{ENV_PREFIX}}REGISTRATION_TOKEN}" \
+    "$bin" join --url "$url" --target "${{{ENV_PREFIX}}ID}" --name "$(hostname -s)" \
+    || echo "warning: qits-node-tunnel join failed (exit $?); the runner is installed without the private network." >&2
 }
 
 main() {
@@ -68,6 +95,10 @@ main() {
   command -v docker >/dev/null 2>&1 || refuse "docker is not on PATH; install docker first."
   docker version >/dev/null 2>&1 \
     || refuse "docker does not answer (docker version failed); start it, or run this as root or as a user in the docker group."
+
+  # Order is load-bearing: the runner deletes the registration token once it registers, and the
+  # join above needs that token, so it runs here — after the docker checks, before the login below.
+  join_network
 
   # The registry answers an anonymous pull with 401, and the host's docker config is nobody's to
   # write: a login there would outlive this script and serve every docker user on the host. So the

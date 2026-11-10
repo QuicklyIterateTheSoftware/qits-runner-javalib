@@ -124,17 +124,25 @@ public final class FakeDocker {
       }
 
       # create <store> <name> <args...>: a new entry with the --label arguments as its labels.
+      # Written in a staging directory outside both stores and moved into place whole: a reader
+      # listing the store (FakeDocker#containers, another caller's ps) must never see the entry
+      # before its labels — a run that appeared with {} failed TwoRunnersOneNodeTest on a busy
+      # node (qits-1991, qits-runner-javalib-rr-179). A rename within one filesystem is atomic.
       create() {
         entry="$1/$2"; shift 2
-        mkdir -p "$entry"
-        : > "$entry/labels"
+        staging="$dir/state/staging/$$-$(basename "$entry")"
+        rm -rf "$staging"
+        mkdir -p "$staging"
+        : > "$staging/labels"
         while [ $# -gt 0 ]; do
           case "$1" in
-            --label|-l) printf '%s\\n' "$2" >> "$entry/labels"; shift 2;;
-            --label=*) printf '%s\\n' "${1#--label=}" >> "$entry/labels"; shift;;
+            --label|-l) printf '%s\\n' "$2" >> "$staging/labels"; shift 2;;
+            --label=*) printf '%s\\n' "${1#--label=}" >> "$staging/labels"; shift;;
             *) shift;;
           esac
         done
+        # The caller checked the name is free; one taken since keeps the entry already there.
+        if [ -e "$entry" ]; then rm -rf "$staging"; else mv "$staging" "$entry"; fi
       }
 
       case "$1" in

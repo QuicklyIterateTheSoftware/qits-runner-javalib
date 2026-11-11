@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import eu.wohlben.qits.runner.protocol.Retire;
 import eu.wohlben.qits.runner.protocol.Upgrade;
 import eu.wohlben.qits.runner.toolkit.testing.FakeDocker;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,6 +17,9 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -233,5 +237,121 @@ class SelfUpdateTest {
     assertTrue(
         docker.calls("image").stream().noneMatch(c -> c.get(1).equals("rm")),
         () -> "never the running image: " + docker.calls("image"));
+  }
+
+  private static final String SELF = "0123456789ab";
+  private static final String NEXT = "2026.1.2";
+  private static final String NEXT_IMAGE = "registry.example:5000/qits/qits-toy-runner:" + NEXT;
+
+  /**
+   * The runner's own container as docker answers its inspect — with {@code HostConfig.Dns} set,
+   * as on a predecessor that was itself started with resolvers — and its image's config.
+   */
+  private static void runnerContainer(FakeDocker docker) throws Exception {
+    docker.answerFor(
+        "inspect",
+        SELF,
+        0,
+        new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("Id", SELF + "0".repeat(52))
+                        .put("Image", "sha256:old")
+                        .put(
+                            "Config",
+                            new JsonObject()
+                                .put("Env", List.of("QITS_TOY_RUNNER_ID=r1"))
+                                .put("Labels", Map.of("qits.toy.runner.process", "r1")))
+                        .put(
+                            "HostConfig",
+                            new JsonObject()
+                                .put("Binds", List.of("/var/run/docker.sock:/var/run/docker.sock"))
+                                .put("Dns", List.of("100.96.0.1", "192.168.188.1"))
+                                .put("RestartPolicy", Map.of("Name", "unless-stopped"))
+                                .put("NetworkMode", "default")))
+                .encode()
+            + "\n",
+        "");
+    docker.answerFor(
+        "image-inspect",
+        "sha256:old",
+        0,
+        new JsonArray().add(new JsonObject().put("Id", "sha256:old")).encode() + "\n",
+        "");
+    docker.answer("pull", 0, "", "");
+  }
+
+  /** Drive one upgrade to its successor's {@code docker run}, and answer that run's argv. */
+  private static List<String> successorRun(FakeDocker docker, Supplier<List<String>> dns)
+      throws Exception {
+    runnerContainer(docker);
+    RunnerDocker runner = docker(docker);
+    SelfUpdate selfUpdate =
+        new SelfUpdate(
+            Toy.IDENTITY,
+            runner,
+            "r1",
+            Optional.of(SELF),
+            FAST,
+            new RegistryLogin(Toy.IDENTITY, runner, () -> CLIENT),
+            () -> true,
+            new RunnerImages(Toy.IDENTITY, runner, Optional.of(SELF)),
+            dns);
+    try {
+      selfUpdate.upgrade(new Upgrade(NEXT, NEXT_IMAGE, null));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+      while (docker.calls("run").isEmpty() && System.nanoTime() < deadline) {
+        Thread.sleep(20);
+      }
+      assertFalse(docker.calls("run").isEmpty(), () -> "no successor started: " + docker.calls());
+      return docker.calls("run").getFirst();
+    } finally {
+      selfUpdate.shutdownNow();
+    }
+  }
+
+  /** qits-2090: the seam's answer, asked at the rollover, is the successor's resolvers. */
+  @Test
+  void theSeamsResolversReachTheSuccessorInOrder(@TempDir Path dir) throws Exception {
+    AtomicInteger asked = new AtomicInteger();
+    List<String> run =
+        successorRun(
+            new FakeDocker(dir),
+            () -> {
+              asked.incrementAndGet();
+              return List.of("100.96.0.1", "fd00::53");
+            });
+
+    assertEquals(
+        List.of("--restart", "unless-stopped", "--dns", "100.96.0.1", "--dns", "fd00::53"),
+        run.subList(4, 10),
+        run::toString);
+    assertEquals(1, asked.get(), "asked once, when the successor's argv is built");
+  }
+
+  /**
+   * A predecessor started with resolvers does not hand them on: with the seam answering none, the
+   * successor has no {@code --dns}, so a node whose tunnel went away converges at this rollover.
+   */
+  @Test
+  void aPredecessorsResolversAreNeverInherited(@TempDir Path dir) throws Exception {
+    List<String> run = successorRun(new FakeDocker(dir), List::of);
+
+    assertFalse(run.contains("--dns"), run::toString);
+    assertEquals(NEXT_IMAGE, run.getLast());
+  }
+
+  @Test
+  void aSeamThatThrowsStartsTheSuccessorWithNoResolvers(@TempDir Path dir) throws Exception {
+    List<String> run =
+        successorRun(
+            new FakeDocker(dir),
+            () -> {
+              throw new IllegalStateException("the tunnel's state is unreadable");
+            });
+
+    assertFalse(run.contains("--dns"), run::toString);
+    assertEquals("qits-toy-runner-r1-" + NEXT, run.get(3), "the rollover went ahead");
+    assertEquals(NEXT_IMAGE, run.getLast());
   }
 }

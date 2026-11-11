@@ -228,6 +228,8 @@ domain codec.
 - `housekeeping()`: one `HousekeepingPass` (it keeps the scratch volume on the node). A pass may
   touch only what carries the runner's labels or names; never `system prune`, `image prune -a`,
   `volume prune` or `container prune`.
+- `successorDns()` (not overridden; default none): the resolvers a successor is started with,
+  asked at each rollover — see "Rendering the install script" below.
 - `teardown()`: one `TeardownItem` — `VOLUME qits-harness-runner-scratch-<id8>`. It carries no
   runner label, so only the item reaches it at decommission. An item whose name does not start with
   `<namePrefix>-` is refused, which is what makes "remove the node's buildkitd" impossible to write
@@ -432,6 +434,17 @@ OOM kills. The install script renders it for that kind only (every other kind's 
 byte what it was), and `runSuccessor` adds it when the predecessor's binds and mounts have nothing
 at `/qits/host-cgroup`, so a target installed earlier gains it at its next self-update without a
 reinstall. The decommission helper never gets it: it needs the socket only.
+
+**The successor's resolvers are decided, never inherited** (qits-2090). `SelfSpec` does not read
+`HostConfig.Dns`; instead `runSuccessor` writes one `--dns <ip>` per entry of the list the runner
+decides at that rollover, in order, right after `--restart` and the optional `--network`. The list
+comes from the domain's `RunnerDomain.successorDns()` (default: none), asked afresh each time a
+successor's argv is built — the `Supplier<List<String>>` the `SelfUpdate` constructor takes. Each
+entry must be an IP literal (`ContainersIdentifiers.requireDnsServer`); anything else fails that
+attempt like any other underivable parameter. An answer that throws is logged and read as none, so
+a rollover never fails on it. With no resolvers the argv is byte for byte what it was, which is
+what `InstallScriptContractTest` pins; a node whose tunnel went away converges at its next
+rollover.
 
 ## Rules for changing the protocol
 

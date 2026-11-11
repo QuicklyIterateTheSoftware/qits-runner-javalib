@@ -149,6 +149,65 @@ class LifecycleArgvTest {
   }
 
   /**
+   * qits-2090: the resolvers the runner decided for this rollover, one {@code --dns} each, in their
+   * order, right after the restart policy and the network.
+   */
+  @Test
+  void theSuccessorsResolversFollowTheRestartPolicyAndNetworkInOrder() {
+    SelfSpec onNet =
+        new SelfSpec(
+            "i", "sha256:old", Map.of(), Map.of(), List.of(), List.of(), "always", "qits-net");
+    assertEquals(
+        List.of(
+            "docker", "run", "-d", "--name", "qits-ci-runner-r1-2", "--restart", "always",
+            "--network", "qits-net", "--dns", "100.96.0.1", "--dns", "192.168.188.1", "--label",
+            "qits.ci.runner.process=r1", "--label", "qits.ci.runner.version=2", "r/i:2"),
+        LifecycleArgv.runSuccessor(
+            CI, "docker", "r1", "2", "r/i:2", onNet, List.of("100.96.0.1", "192.168.188.1")));
+
+    List<String> onBridge =
+        LifecycleArgv.runSuccessor(
+            CI, "docker", "r1", "2", "r/i:2", self(Map.of()), List.of("fd00::53"));
+    assertEquals(
+        List.of("--restart", "unless-stopped", "--dns", "fd00::53", "--label"),
+        onBridge.subList(5, 10),
+        "on the default bridge the resolvers follow the restart policy directly: " + onBridge);
+  }
+
+  @Test
+  void noResolversIsTodaysArgv() {
+    SelfSpec self = self(Map.of("k", "v"));
+    List<String> today = LifecycleArgv.runSuccessor(CI, "docker", "r1", "2", "r/i:2", self);
+    assertEquals(
+        today, LifecycleArgv.runSuccessor(CI, "docker", "r1", "2", "r/i:2", self, List.of()));
+    assertEquals(today, LifecycleArgv.runSuccessor(CI, "docker", "r1", "2", "r/i:2", self, null));
+    assertFalse(today.contains("--dns"), today.toString());
+  }
+
+  @Test
+  void aResolverThatIsNotAnIpLiteralIsRefused() {
+    for (String bad : List.of("evil;rm", "host.example", "1.2.3.256", "", "100.96.0.1 -v")) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              LifecycleArgv.runSuccessor(
+                  CI, "docker", "r1", "2", "r/i:2", self(Map.of()), List.of("100.96.0.1", bad)),
+          bad);
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            LifecycleArgv.runSuccessor(
+                CI,
+                "docker",
+                "r1",
+                "2",
+                "r/i:2",
+                self(Map.of()),
+                java.util.Arrays.asList("100.96.0.1", null)));
+  }
+
+  /**
    * qits-1818: a runner that reads the host's cgroups gains the read-only bind at its self-update
    * when its predecessor was installed without it — after the carried binds, before the mounts —
    * and is never given it twice, whether the predecessor carries it as a bind or as a mount.

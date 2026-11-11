@@ -14,6 +14,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import org.jboss.logging.Logger;
 
 /**
@@ -72,6 +73,7 @@ public final class SelfUpdate {
   private final RegistryLogin login;
   private final BooleanSupplier quiescent;
   private final RunnerImages runnerImages;
+  private final Supplier<List<String>> successorDns;
   private final String who;
   private final AtomicBoolean predecessorsSwept = new AtomicBoolean();
   private final ScheduledThreadPoolExecutor executor;
@@ -84,6 +86,7 @@ public final class SelfUpdate {
   private boolean recheckDue;
   private int failures;
 
+  /** A self-update whose successors are started with no {@code --dns}. */
   public SelfUpdate(
       RunnerIdentity identity,
       RunnerDocker docker,
@@ -93,6 +96,25 @@ public final class SelfUpdate {
       RegistryLogin login,
       BooleanSupplier quiescent,
       RunnerImages runnerImages) {
+    this(identity, docker, runnerId, self, settings, login, quiescent, runnerImages, List::of);
+  }
+
+  /**
+   * @param successorDns the resolvers a successor is started with ({@link
+   *     RunnerDomain#successorDns}), asked afresh each time a successor's argv is built. An answer
+   *     that throws is logged and read as none — a rollover never fails on it; an entry that is
+   *     not an IP literal fails that attempt like any other underivable parameter.
+   */
+  public SelfUpdate(
+      RunnerIdentity identity,
+      RunnerDocker docker,
+      String runnerId,
+      Optional<String> self,
+      Settings settings,
+      RegistryLogin login,
+      BooleanSupplier quiescent,
+      RunnerImages runnerImages,
+      Supplier<List<String>> successorDns) {
     this.identity = identity;
     this.docker = docker;
     this.runnerId = runnerId;
@@ -101,6 +123,7 @@ public final class SelfUpdate {
     this.login = login;
     this.quiescent = quiescent;
     this.runnerImages = runnerImages;
+    this.successorDns = successorDns == null ? List::of : successorDns;
     this.who = identity.logName();
     this.executor =
         new ScheduledThreadPoolExecutor(
@@ -452,7 +475,13 @@ public final class SelfUpdate {
       SelfSpec spec = SelfSpec.parse(inspected.stdout(), image.stdout());
       argv =
           LifecycleArgv.runSuccessor(
-              identity, docker.binary(), runnerId, upgrade.version(), upgrade.image(), spec);
+              identity,
+              docker.binary(),
+              runnerId,
+              upgrade.version(),
+              upgrade.image(),
+              spec,
+              successorDns());
     } catch (RuntimeException e) {
       return Optional.of("could not derive its successor's parameters: " + e.getMessage());
     }
@@ -490,6 +519,19 @@ public final class SelfUpdate {
         "%s started its successor %s on %s; waiting up to %ds for it to take over",
         who, name, upgrade.image(), settings.successorTimeoutMillis() / 1000);
     return Optional.empty();
+  }
+
+  /** The seam's answer for this rollover; one that throws, or answers null, is none. */
+  private List<String> successorDns() {
+    try {
+      List<String> dns = successorDns.get();
+      return dns == null ? List.of() : dns;
+    } catch (RuntimeException e) {
+      LOG.warnf(
+          "%s could not decide its successor's resolvers (%s); it starts it with none",
+          who, e.toString());
+      return List.of();
+    }
   }
 
   private void timedOut() {

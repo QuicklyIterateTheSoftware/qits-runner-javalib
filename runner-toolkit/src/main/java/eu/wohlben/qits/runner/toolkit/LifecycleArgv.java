@@ -1,5 +1,6 @@
 package eu.wohlben.qits.runner.toolkit;
 
+import eu.wohlben.qits.containers.driver.spec.ContainersIdentifiers;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -185,6 +186,11 @@ public final class LifecycleArgv {
    *       lands on {@link #HOST_CGROUP} — so a target installed before qits-1818 gains it at its
    *       next self-update, with no reinstall, and one that has it is not given it twice.
    *   <li>The network is carried only when it is not docker's default bridge.
+   *   <li>The resolvers are never carried: {@code dns} is the list the runner decided for this
+   *       rollover ({@code SelfUpdate}'s successor-DNS seam, {@link RunnerDomain#successorDns}),
+   *       one {@code --dns} each, in order, right after the restart policy and the network. Each
+   *       entry must be an IP literal, v4 or v6 ({@link ContainersIdentifiers#requireDnsServer}).
+   *       An empty or null list writes no {@code --dns} at all — exactly the argv before qits-2090.
    *   <li>The environment is the one the container was <em>given</em> ({@link SelfSpec} subtracts
    *       the image's), and never {@code <envPrefix>REGISTRATION_TOKEN}: a successor starts
    *       registered.
@@ -199,7 +205,8 @@ public final class LifecycleArgv {
       String runnerId,
       String version,
       String image,
-      SelfSpec self) {
+      SelfSpec self,
+      List<String> dns) {
     List<String> argv = new ArrayList<>();
     argv.add(dockerBinary);
     argv.add("run");
@@ -214,6 +221,12 @@ public final class LifecycleArgv {
         && !self.network().equals("bridge")) {
       argv.add("--network");
       argv.add(require(NAME, "network", self.network()));
+    }
+    if (dns != null) {
+      for (String server : dns) {
+        argv.add("--dns");
+        argv.add(ContainersIdentifiers.requireDnsServer(server));
+      }
     }
     Map<String, String> labels = new TreeMap<>();
     for (Map.Entry<String, String> label : self.labels().entrySet()) {
@@ -254,6 +267,20 @@ public final class LifecycleArgv {
     }
     argv.add(requireImage(image));
     return List.copyOf(argv);
+  }
+
+  /**
+   * {@link #runSuccessor(RunnerIdentity, String, String, String, String, SelfSpec, List)} with no
+   * resolvers: no {@code --dns} at all.
+   */
+  public static List<String> runSuccessor(
+      RunnerIdentity identity,
+      String dockerBinary,
+      String runnerId,
+      String version,
+      String image,
+      SelfSpec self) {
+    return runSuccessor(identity, dockerBinary, runnerId, version, image, self, List.of());
   }
 
   /**

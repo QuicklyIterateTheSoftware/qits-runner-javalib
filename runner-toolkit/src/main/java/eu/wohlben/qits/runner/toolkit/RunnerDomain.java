@@ -85,6 +85,19 @@ public interface RunnerDomain<D extends RunnerMessage> {
     return List.of();
   }
 
+  /**
+   * The resolvers this runner's successor is started with — one {@code --dns} each, in order
+   * ({@link LifecycleArgv#runSuccessor}). Asked afresh each time a successor's {@code docker run}
+   * is built, so the answer may follow the node's state at that rollover (qits-2090): a resolver
+   * that only exists while a tunnel is up is answered only while it is. Each entry must be an IP
+   * literal, v4 or v6; anything else fails that attempt, which is retried as every other failed
+   * start is. The default, and an answer that throws, is none: a successor never inherits its
+   * predecessor's resolvers ({@link SelfSpec}). Off the event loop, on the self-update thread.
+   */
+  default List<String> successorDns() {
+    return List.of();
+  }
+
   /** The socket dropped: held items are carried, slots and backlog are zero until the next Ack. */
   default void onSessionLost() {}
 }

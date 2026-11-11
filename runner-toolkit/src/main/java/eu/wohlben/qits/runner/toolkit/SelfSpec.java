@@ -34,6 +34,11 @@ import java.util.Set;
  * or {@code DOCKER_VERSION} onto the new image, so an entry exactly equal to the old image's is
  * dropped and the new image brings its own.
  *
+ * <p><b>{@code HostConfig.Dns} is deliberately not read</b> (qits-2090): a successor never
+ * inherits its predecessor's resolvers — they are decided afresh at each rollover ({@link
+ * RunnerDomain#successorDns}) — so a node whose tunnel went away converges at the next rollover
+ * instead of carrying a dead resolver forever.
+ *
  * @param env what the container was given, by key
  * @param labels likewise, minus the image's
  * @param binds {@code HostConfig.Binds}: each {@code -v} as it was written

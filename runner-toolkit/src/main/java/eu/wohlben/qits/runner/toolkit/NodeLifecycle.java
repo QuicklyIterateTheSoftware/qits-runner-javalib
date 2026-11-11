@@ -81,7 +81,8 @@ interface NodeLifecycle {
             options.selfUpdate(),
             login,
             domain::quiescent,
-            images);
+            images,
+            domain::successorDns);
     Decommission decommission =
         new Decommission(
             identity, docker, settings.runnerId(), options.self(), settings.stateDir(),

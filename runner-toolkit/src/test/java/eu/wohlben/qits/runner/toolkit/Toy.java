@@ -8,11 +8,11 @@ import eu.wohlben.qits.runner.protocol.RunnerMessage;
 import eu.wohlben.qits.runner.protocol.RunnerVocabulary;
 import eu.wohlben.qits.runner.protocol.WireMaps;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * The suite's runner: a test-only identity and a two-frame domain — host → runner {@code take}
@@ -98,9 +98,11 @@ final class Toy {
   /** The two-frame domain, recording every hook it is called with. */
   static class Domain implements RunnerDomain<Message> {
 
-    final List<String> events = Collections.synchronizedList(new ArrayList<>());
-    final List<Message> messages = Collections.synchronizedList(new ArrayList<>());
-    final List<List<String>> dropped = Collections.synchronizedList(new ArrayList<>());
+    // Copy-on-write, not synchronizedList: tests stream these from their own thread while the
+    // event loop appends, and a synchronized list's stream is not synchronized (qits-2090).
+    final List<String> events = new CopyOnWriteArrayList<>();
+    final List<Message> messages = new CopyOnWriteArrayList<>();
+    final List<List<String>> dropped = new CopyOnWriteArrayList<>();
     volatile boolean quiescent = true;
     volatile List<TeardownItem> teardown = List.of();
 

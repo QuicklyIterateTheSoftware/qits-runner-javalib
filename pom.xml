@@ -58,7 +58,7 @@
         <qits.idp-golden-masters.version>2026.1109.13349</qits.idp-golden-masters.version>
         <qits.observability-golden-masters.version>2026.1107.172205</qits.observability-golden-masters.version>
         <qits.workspaces-golden-masters.version>2026.1111.70514</qits.workspaces-golden-masters.version>
-        <qits.projects-golden-masters.version>2026.1112.85411</qits.projects-golden-masters.version>
+        <qits.projects-golden-masters.version>2026.1112.114615</qits.projects-golden-masters.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain
              developer build resolves off this public default. -->

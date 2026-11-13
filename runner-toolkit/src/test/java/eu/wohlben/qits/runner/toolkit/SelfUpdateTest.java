@@ -306,7 +306,12 @@ class SelfUpdateTest {
       assertFalse(docker.calls("run").isEmpty(), () -> "no successor started: " + docker.calls());
       return docker.calls("run").getFirst();
     } finally {
-      selfUpdate.shutdownNow();
+      // Never shutdownNow: an interrupt SIGKILLs only the fake docker's sh, and the children it
+      // already forked go on writing the temp dir while JUnit deletes it (qits-2219).
+      selfUpdate.shutdown();
+      assertTrue(
+          selfUpdate.awaitTermination(TimeUnit.SECONDS.toNanos(15)),
+          "the self-update thread finished its docker call");
     }
   }
 

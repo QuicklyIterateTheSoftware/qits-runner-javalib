@@ -153,10 +153,14 @@ public final class RunnerDocker implements DockerCommand {
           answered.stdoutTruncated());
     }
     String stderr = answered.stderrTail();
-    if (answered.exitCode() == -1 && answered.stdout().isEmpty()) {
+    int exit = answered.exitCode();
+    // The driver answers a spawn failure as -1, or, from qits-2213 on, as 127 "cannot start ...".
+    boolean notStarted =
+        exit == 127 && answered.stdout().isEmpty() && stderr.startsWith("cannot start ");
+    if ((exit == -1 && answered.stdout().isEmpty()) || notStarted) {
+      exit = -1;
       stderr = "could not run " + argv.getFirst() + ": " + stderr;
     }
-    return new Result(
-        answered.exitCode(), answered.stdout(), stderr, false, answered.stdoutTruncated());
+    return new Result(exit, answered.stdout(), stderr, false, answered.stdoutTruncated());
   }
 }

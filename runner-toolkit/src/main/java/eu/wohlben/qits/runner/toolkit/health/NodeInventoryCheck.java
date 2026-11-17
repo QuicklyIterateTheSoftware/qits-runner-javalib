@@ -1,5 +1,6 @@
 package eu.wohlben.qits.runner.toolkit.health;
 
+import eu.wohlben.qits.containers.driver.docker.DockerArgv;
 import eu.wohlben.qits.runner.toolkit.DockerCommand;
 import eu.wohlben.qits.runner.toolkit.LifecycleArgv;
 import eu.wohlben.qits.runner.toolkit.RunnerDocker;
@@ -10,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
@@ -145,7 +147,7 @@ final class NodeInventoryCheck implements RunnerHealthCheck {
   private static List<String> list(
       DockerCommand docker, String filter, List<String> errors, String what) {
     RunnerDocker.Result listed =
-        docker.run(List.of(docker.binary(), "ps", "-aq", "--filter", filter));
+        docker.run(DockerArgv.psAllQuiet(docker.binary(), List.of(filter)));
     if (!listed.ok()) {
       errors.add("could not list the " + what + ": " + listed.detail());
       return List.of();
@@ -155,7 +157,7 @@ final class NodeInventoryCheck implements RunnerHealthCheck {
 
   private List<String> listVolumes(DockerCommand docker, List<String> errors) {
     RunnerDocker.Result listed =
-        docker.run(List.of(docker.binary(), "volume", "ls", "-q", "--filter", ownerFilter()));
+        docker.run(DockerArgv.volumeLs(docker.binary(), Map.of(identity.ownerLabel(), runnerId)));
     if (!listed.ok()) {
       errors.add("could not list the volumes: " + listed.detail());
       return List.of();
@@ -170,7 +172,7 @@ final class NodeInventoryCheck implements RunnerHealthCheck {
     Optional<String> line =
         inspect(
             docker,
-            List.of(docker.binary(), "inspect", "--type", "container", "--format", containerFormat),
+            belted -> DockerArgv.inspectTypeContainerFormat(docker.binary(), belted, containerFormat),
             id,
             errors);
     if (line.isEmpty()) {
@@ -202,7 +204,7 @@ final class NodeInventoryCheck implements RunnerHealthCheck {
     Optional<String> line =
         inspect(
             docker,
-            List.of(docker.binary(), "volume", "inspect", "--format", volumeFormat),
+            belted -> DockerArgv.volumeInspect(docker.binary(), belted, volumeFormat),
             name,
             errors);
     if (line.isEmpty()) {
@@ -226,15 +228,18 @@ final class NodeInventoryCheck implements RunnerHealthCheck {
    * docker did not answer (an error).
    */
   private Optional<String> inspect(
-      DockerCommand docker, List<String> argv, String object, List<String> errors) {
-    List<String> call = new ArrayList<>(argv);
+      DockerCommand docker,
+      Function<String, List<String>> argv,
+      String object,
+      List<String> errors) {
+    String belted;
     try {
-      call.add(LifecycleArgv.requireWorkId(object));
+      belted = LifecycleArgv.requireWorkId(object);
     } catch (IllegalArgumentException notAName) {
       errors.add("docker listed a name this runner does not read: " + object);
       return Optional.empty();
     }
-    RunnerDocker.Result answered = docker.run(call);
+    RunnerDocker.Result answered = docker.run(argv.apply(belted));
     if (!answered.ok()) {
       if (!answered.timedOut() && absent.test(answered.detail())) {
         return Optional.empty();

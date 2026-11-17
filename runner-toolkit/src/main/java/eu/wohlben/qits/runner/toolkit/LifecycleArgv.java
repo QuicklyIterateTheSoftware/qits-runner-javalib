@@ -1,6 +1,10 @@
 package eu.wohlben.qits.runner.toolkit;
 
+import eu.wohlben.qits.containers.driver.docker.DockerArgv;
+import eu.wohlben.qits.containers.driver.docker.HostRunArgv;
+import eu.wohlben.qits.containers.driver.docker.SwarmArgv;
 import eu.wohlben.qits.containers.driver.spec.ContainersIdentifiers;
+import eu.wohlben.qits.containers.driver.spec.HostRunSpec;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +21,12 @@ import java.util.regex.Pattern;
  *
  * <p><b>The belts run here</b>, on every value that reaches an element: a value outside its charset
  * is an {@link IllegalArgumentException}. Nothing is ever assembled into a shell line.
+ *
+ * <p><b>The spelling is qits-containers-driver's</b> (qits-2302): every element is rendered by
+ * {@link DockerArgv}, {@link SwarmArgv} or {@link HostRunArgv} ({@link HostRunSpec}), never written
+ * here. This class keeps what is the runner's own — which verb, which values, in which order, and
+ * its own belts, which run first so a refusal still names the toolkit's {@code what} — and hands
+ * the checked values over; the library belts them again on the way out, its own way.
  *
  * <p><b>What is not here, on purpose.</b> No {@code --rm}: a self-removing container races the
  * diagnosis. No {@code name=} filter: docker matches it as a substring, so it could select a
@@ -80,44 +90,35 @@ public final class LifecycleArgv {
    * through {@link RunnerDocker#run}, whose stdout is kept from its head.
    */
   public static List<String> inspectSelf(String dockerBinary, String containerId) {
-    return List.of(dockerBinary, "inspect", require(NAME, "container id", containerId));
+    return DockerArgv.inspect(dockerBinary, require(NAME, "container id", containerId));
   }
 
   /** The image the runner's own container was started from, whole — see {@link #inspectSelf}. */
   public static List<String> imageConfig(String dockerBinary, String image) {
-    return List.of(dockerBinary, "image", "inspect", requireImage(image));
+    return DockerArgv.imageInspect(dockerBinary, requireImage(image));
   }
 
   /** The registry digests a pulled image is known under — what an expected digest is checked in. */
   public static List<String> repoDigests(String dockerBinary, String image) {
-    return List.of(
-        dockerBinary, "image", "inspect", "--format", "{{json .RepoDigests}}", requireImage(image));
+    return DockerArgv.imageInspectFormat(dockerBinary, requireImage(image), "{{json .RepoDigests}}");
   }
 
   /** Where a container is in its life: {@code running}, {@code exited}, {@code restarting}, … */
   public static List<String> state(String dockerBinary, String containerId) {
-    return List.of(
-        dockerBinary,
-        "inspect",
-        "--format",
-        "{{.State.Status}}",
-        require(NAME, "container id", containerId));
+    // SwarmArgv's inspect is unbelted: the NAME belt here is the only one this id meets.
+    return SwarmArgv.containerInspect(
+        dockerBinary, require(NAME, "container id", containerId), "{{.State.Status}}");
   }
 
   /** The full image id a container runs — how the runner knows which image is its own. */
   public static List<String> containerImage(String dockerBinary, String containerId) {
-    return List.of(
-        dockerBinary,
-        "inspect",
-        "--format",
-        "{{.Image}}",
-        require(NAME, "container id", containerId));
+    return SwarmArgv.containerInspect(
+        dockerBinary, require(NAME, "container id", containerId), "{{.Image}}");
   }
 
   /** An image's full id; a nonzero answer is "not here". */
   public static List<String> imageInspect(String dockerBinary, String image) {
-    return List.of(
-        dockerBinary, "image", "inspect", "--format", "{{.Id}}", requireImage(image));
+    return DockerArgv.imageInspectFormat(dockerBinary, requireImage(image), "{{.Id}}");
   }
 
   /**
@@ -127,16 +128,9 @@ public final class LifecycleArgv {
    * config when it is null.
    */
   public static List<String> pull(String dockerBinary, Path configDir, String image) {
-    List<String> argv = new ArrayList<>();
-    argv.add(dockerBinary);
-    if (configDir != null) {
-      // A global option, so it goes between the binary and the subcommand.
-      argv.add("--config");
-      argv.add(configDir.toString());
-    }
-    argv.add("pull");
-    argv.add(requireImage(image));
-    return List.copyOf(argv);
+    String checked = requireImage(image);
+    // --config is a global option, so the library puts it between the binary and the subcommand.
+    return DockerArgv.pull(dockerBinary, configDir == null ? null : configDir.toString(), checked);
   }
 
   /**
@@ -144,8 +138,7 @@ public final class LifecycleArgv {
    * retiring runner's own step out of the way of its successor.
    */
   public static List<String> noRestart(String dockerBinary, String containerId) {
-    return List.of(
-        dockerBinary, "update", "--restart=no", require(NAME, "container id", containerId));
+    return DockerArgv.updateRestartNo(dockerBinary, require(NAME, "container id", containerId));
   }
 
   /**
@@ -154,7 +147,7 @@ public final class LifecycleArgv {
    * a domain supplied, which goes through {@link #teardown}'s prefix belt instead.
    */
   public static List<String> rm(String dockerBinary, String idOrDerivedName) {
-    return List.of(dockerBinary, "rm", "-f", require(NAME, "container", idOrDerivedName));
+    return DockerArgv.rm(dockerBinary, List.of(require(NAME, "container", idOrDerivedName)));
   }
 
   /**
@@ -163,14 +156,8 @@ public final class LifecycleArgv {
    */
   public static List<String> psProcess(
       RunnerIdentity identity, String dockerBinary, String runnerId) {
-    return List.of(
-        dockerBinary,
-        "ps",
-        "-a",
-        "--format",
-        processFormat(identity),
-        "--filter",
-        "label=" + identity.processLabel() + "=" + require(NAME, "runner id", runnerId));
+    String filter = "label=" + identity.processLabel() + "=" + require(NAME, "runner id", runnerId);
+    return DockerArgv.psFormatFirst(dockerBinary, true, processFormat(identity), List.of(filter));
   }
 
   /**
@@ -207,25 +194,19 @@ public final class LifecycleArgv {
       String image,
       SelfSpec self,
       List<String> dns) {
-    List<String> argv = new ArrayList<>();
-    argv.add(dockerBinary);
-    argv.add("run");
-    argv.add("-d");
-    argv.add("--name");
-    argv.add(containerName(identity, runnerId, version));
-    argv.add("--restart");
-    argv.add(oneLine("restart policy", self.restart()));
+    // Today's belts, in today's order, before anything is handed over; the image's runs last.
+    HostRunSpec.Builder run =
+        HostRunSpec.detached(containerName(identity, runnerId, version), image);
+    run.restart(oneLine("restart policy", self.restart()));
     if (self.network() != null
         && !self.network().isEmpty()
         && !self.network().equals("default")
         && !self.network().equals("bridge")) {
-      argv.add("--network");
-      argv.add(require(NAME, "network", self.network()));
+      run.network(require(NAME, "network", self.network()));
     }
     if (dns != null) {
       for (String server : dns) {
-        argv.add("--dns");
-        argv.add(ContainersIdentifiers.requireDnsServer(server));
+        run.dns(ContainersIdentifiers.requireDnsServer(server));
       }
     }
     Map<String, String> labels = new TreeMap<>();
@@ -239,34 +220,28 @@ public final class LifecycleArgv {
     labels.put(identity.processLabel(), require(NAME, "runner id", runnerId));
     labels.put(identity.versionLabel(), requireVersion(version));
     for (Map.Entry<String, String> label : labels.entrySet()) {
-      argv.add("--label");
-      argv.add(label.getKey() + "=" + label.getValue());
+      run.label(label.getKey(), label.getValue());
     }
     for (String bind : self.binds()) {
-      argv.add("-v");
-      argv.add(oneLine("bind", bind));
+      run.volume(oneLine("bind", bind));
     }
     if (identity.readsHostCgroup() && !landsAt(self, HOST_CGROUP)) {
-      argv.add("-v");
-      argv.add(HOST_CGROUP_BIND);
+      run.volume(HOST_CGROUP_BIND);
     }
     for (String mount : self.mounts()) {
-      argv.add("--mount");
-      argv.add(oneLine("mount", mount));
+      run.mount(oneLine("mount", mount));
     }
     String token = identity.env(RunnerSettings.REGISTRATION_TOKEN);
     for (Map.Entry<String, String> variable : new TreeMap<>(self.env()).entrySet()) {
       if (variable.getKey().equals(token)) {
         continue;
       }
-      argv.add("-e");
-      argv.add(
-          require(ENV_KEY, "environment key", variable.getKey())
-              + "="
-              + oneLine("environment value", variable.getValue()));
+      run.env(
+          require(ENV_KEY, "environment key", variable.getKey()),
+          oneLine("environment value", variable.getValue()));
     }
-    argv.add(requireImage(image));
-    return List.copyOf(argv);
+    requireImage(image);
+    return HostRunArgv.render(dockerBinary, run.build());
   }
 
   /**
@@ -302,30 +277,20 @@ public final class LifecycleArgv {
       String image,
       String volume,
       List<TeardownItem> teardown) {
-    List<String> argv = new ArrayList<>();
-    argv.add(dockerBinary);
-    argv.add("run");
-    argv.add("-d");
-    argv.add("--name");
-    argv.add(helperName(identity, runnerId));
-    argv.add("--network");
-    argv.add("none");
-    argv.add("--label");
-    argv.add(identity.decommissionLabel() + "=" + require(NAME, "runner id", runnerId));
-    argv.add("-v");
-    argv.add(DOCKER_SOCKET + ":" + DOCKER_SOCKET);
-    argv.add("-e");
-    argv.add(identity.env(DECOMMISSION) + "=" + runnerId);
+    HostRunSpec.Builder run =
+        HostRunSpec.detached(helperName(identity, runnerId), image)
+            .network("none")
+            .label(identity.decommissionLabel(), require(NAME, "runner id", runnerId))
+            .volume(DOCKER_SOCKET + ":" + DOCKER_SOCKET)
+            .env(identity.env(DECOMMISSION), runnerId);
     if (volume != null) {
-      argv.add("-e");
-      argv.add(identity.env(DECOMMISSION_VOLUME) + "=" + require(NAME, "volume", volume));
+      run.env(identity.env(DECOMMISSION_VOLUME), require(NAME, "volume", volume));
     }
     if (teardown != null && !teardown.isEmpty()) {
-      argv.add("-e");
-      argv.add(identity.env(DECOMMISSION_TEARDOWN) + "=" + encodeTeardown(teardown));
+      run.env(identity.env(DECOMMISSION_TEARDOWN), encodeTeardown(teardown));
     }
-    argv.add(requireImage(image));
-    return List.copyOf(argv);
+    requireImage(image);
+    return HostRunArgv.render(dockerBinary, run.build());
   }
 
   /**
@@ -334,7 +299,7 @@ public final class LifecycleArgv {
    * operator's.
    */
   public static List<String> volumeRm(RunnerIdentity identity, String dockerBinary, String volume) {
-    return List.of(dockerBinary, "volume", "rm", requireOwned(identity, "volume", volume));
+    return DockerArgv.volumeRm(dockerBinary, requireOwned(identity, "volume", volume));
   }
 
   /**
@@ -346,9 +311,9 @@ public final class LifecycleArgv {
       RunnerIdentity identity, String dockerBinary, TeardownItem item) {
     String name = requireOwned(identity, "teardown " + item.type().name().toLowerCase(java.util.Locale.ROOT), item.name());
     return switch (item.type()) {
-      case CONTAINER -> List.of(dockerBinary, "rm", "-f", name);
-      case VOLUME -> List.of(dockerBinary, "volume", "rm", name);
-      case NETWORK -> List.of(dockerBinary, "network", "rm", name);
+      case CONTAINER -> DockerArgv.rm(dockerBinary, List.of(name));
+      case VOLUME -> DockerArgv.volumeRm(dockerBinary, name);
+      case NETWORK -> DockerArgv.networkRm(dockerBinary, name);
     };
   }
 
@@ -358,14 +323,12 @@ public final class LifecycleArgv {
    * a {@code reference} filter's glob to span a registry host with a port.
    */
   public static List<String> imageList(String dockerBinary) {
-    return List.of(
-        dockerBinary, "image", "ls", "--no-trunc", "--format", "{{.Repository}}:{{.Tag}}|{{.ID}}");
+    return DockerArgv.imageLs(dockerBinary, "{{.Repository}}:{{.Tag}}|{{.ID}}");
   }
 
   /** Every container, running or not, created from {@code image} (an id or a reference). */
   public static List<String> psAncestor(String dockerBinary, String image) {
-    return List.of(
-        dockerBinary, "ps", "-a", "-q", "--filter", "ancestor=" + requireImage(image));
+    return DockerArgv.psAncestor(dockerBinary, requireImage(image));
   }
 
   /**
@@ -373,7 +336,7 @@ public final class LifecycleArgv {
    * image a container still uses is the belt every garbage collection here leans on.
    */
   public static List<String> imageRm(String dockerBinary, String image) {
-    return List.of(dockerBinary, "image", "rm", requireImage(image));
+    return DockerArgv.imageRmRefs(dockerBinary, List.of(requireImage(image)));
   }
 
   /**
@@ -381,7 +344,7 @@ public final class LifecycleArgv {
    * the node is somebody's machine holding things this runner never pulled.
    */
   public static List<String> imagePruneDangling(String dockerBinary) {
-    return List.of(dockerBinary, "image", "prune", "-f");
+    return DockerArgv.imagePruneDangling(dockerBinary);
   }
 
   /** {@link RunnerIdentity#containerName}, belted: the install script composes the same string. */

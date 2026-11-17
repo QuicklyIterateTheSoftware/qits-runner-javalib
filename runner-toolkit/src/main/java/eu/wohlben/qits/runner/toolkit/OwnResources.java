@@ -1,6 +1,7 @@
 package eu.wohlben.qits.runner.toolkit;
 
 import eu.wohlben.qits.containers.driver.ContainersDriver;
+import eu.wohlben.qits.containers.driver.docker.DockerArgv;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -82,7 +83,7 @@ public final class OwnResources {
    * @throws ListingFailed when docker did not answer
    */
   public List<String> containers() {
-    return list(List.of(docker.binary(), "ps", "-aq", "--filter", ownerFilter()), "containers");
+    return list(DockerArgv.psAllQuiet(docker.binary(), List.of(ownerFilter())), "containers");
   }
 
   /**
@@ -91,8 +92,12 @@ public final class OwnResources {
    * @throws ListingFailed when docker did not answer
    */
   public List<String> volumes() {
+    // volumeLs spells each entry label=<key>=<value>: ownerFilter()'s exact element.
     return list(
-        List.of(docker.binary(), "volume", "ls", "-q", "--filter", ownerFilter()), "volumes");
+        DockerArgv.volumeLs(
+            docker.binary(),
+            Map.of(identity.ownerLabel(), LifecycleArgv.requireRunnerId(runnerId))),
+        "volumes");
   }
 
   /**
@@ -123,14 +128,11 @@ public final class OwnResources {
       List<String> argv;
       try {
         argv =
-            List.of(
+            DockerArgv.psAllQuiet(
                 docker.binary(),
-                "ps",
-                "-aq",
-                "--filter",
-                ownerFilter(),
-                "--filter",
-                "label=" + identity.workLabel() + "=" + LifecycleArgv.requireWorkId(workId));
+                List.of(
+                    ownerFilter(),
+                    "label=" + identity.workLabel() + "=" + LifecycleArgv.requireWorkId(workId)));
       } catch (IllegalArgumentException notAnId) {
         LOG.warnf("%s ignored a work item it cannot name: %s", who, notAnId.getMessage());
         continue;

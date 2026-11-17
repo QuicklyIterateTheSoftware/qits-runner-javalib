@@ -1,11 +1,11 @@
 package eu.wohlben.qits.runner.toolkit.health;
 
+import eu.wohlben.qits.containers.driver.docker.DockerArgv;
 import eu.wohlben.qits.runner.toolkit.DockerCommand;
 import eu.wohlben.qits.runner.toolkit.RunnerDocker;
 import eu.wohlben.qits.runner.toolkit.RunnerIdentity;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Predicate;
@@ -69,7 +69,7 @@ public final class DefaultHealthChecks {
 
   private static RunnerHealthCheck.Result docker(DockerCommand docker) {
     RunnerDocker.Result answered =
-        docker.run(List.of(docker.binary(), "version", "--format", "{{.Server.Version}}"));
+        docker.run(DockerArgv.version(docker.binary(), "{{.Server.Version}}"));
     Map<String, Object> data = new LinkedHashMap<>();
     String version = answered.ok() ? answered.stdout().strip() : "";
     data.put("serverVersion", version.isEmpty() ? null : version);

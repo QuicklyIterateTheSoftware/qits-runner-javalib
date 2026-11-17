@@ -112,6 +112,52 @@ class DefaultHealthChecksTest {
         List.of(List.of("/usr/bin/docker", "version", "--format", "{{.Server.Version}}")), seen);
   }
 
+  /**
+   * qits-2302: the inventory's reads are rendered by qits-containers-driver now; every element is
+   * still the one the check spelled by hand — the listings, then each inspect with the id last.
+   */
+  @Test
+  void nodeInventorysReadsKeepTheirSpellingElementForElement() throws Exception {
+    List<List<String>> seen = new ArrayList<>();
+    DockerCommand own =
+        DockerCommand.of(
+            "docker",
+            Duration.ofSeconds(3),
+            (argv, deadline) -> {
+              seen.add(argv);
+              String out =
+                  argv.contains("-aq") || argv.contains("-q") ? "qits-toy-runner-item-1\n" : "";
+              return new RunnerDocker.Result(0, out, "", false, false);
+            });
+    run(
+        DefaultHealthChecks.nodeInventory(IDENTITY, RUNNER_ID, VERSION, null),
+        HealthContext.of(own, () -> null, Map.of()));
+    String containerFormat =
+        "{{.Id}}|{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}"
+            + "|{{.State.ExitCode}}|{{.Config.Image}}|{{index .Config.Labels \"qits.toy.runner.item\"}}"
+            + "|{{index .Config.Labels \"qits.toy.runner.version\"}}";
+    List<String> inspect =
+        List.of(
+            "docker", "inspect", "--type", "container", "--format", containerFormat,
+            "qits-toy-runner-item-1");
+    assertEquals(
+        List.of(
+            List.of("docker", "ps", "-aq", "--filter", "label=qits.toy.runner=" + RUNNER_ID),
+            inspect,
+            List.of("docker", "volume", "ls", "-q", "--filter", "label=qits.toy.runner=" + RUNNER_ID),
+            List.of(
+                "docker",
+                "volume",
+                "inspect",
+                "--format",
+                "{{.Name}}|{{.CreatedAt}}|{{index .Labels \"qits.toy.runner.item\"}}",
+                "qits-toy-runner-item-1"),
+            List.of(
+                "docker", "ps", "-aq", "--filter", "label=qits.toy.runner.process=" + RUNNER_ID),
+            inspect),
+        seen);
+  }
+
   // --- session -----------------------------------------------------------------------------------
 
   @Test

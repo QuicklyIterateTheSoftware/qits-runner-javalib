@@ -278,6 +278,54 @@ class LifecycleArgvTest {
         "default");
   }
 
+  /**
+   * qits-2302: a running container's facts as docker reports them — a label key with a {@code /}
+   * in it, a bind with SELinux's {@code :Z} beside {@code ro}, a long-form {@code --mount} — are
+   * carried through the library's renderer exactly as the toolkit carried them by hand.
+   */
+  @Test
+  void aSlashedLabelKeyARelabelledBindAndALongMountAreCarriedAsTheyAre() {
+    SelfSpec carried =
+        new SelfSpec(
+            "i",
+            "sha256:old",
+            Map.of("TZ", "Europe/Berlin"),
+            Map.of("io.example/owner", "ops", "com.example.note", ""),
+            List.of("/srv/runner-conf:/etc/runner:ro,Z", "qits-ci-runner-state-r1:/var/lib/qits-ci-runner"),
+            List.of("type=volume,source=cache,target=/cache,readonly"),
+            "on-failure:5",
+            "bridge");
+    assertEquals(
+        List.of(
+            "docker", "run", "-d", "--name", "qits-ci-runner-r1-2", "--restart", "on-failure:5",
+            "--label", "com.example.note=", "--label", "io.example/owner=ops", "--label",
+            "qits.ci.runner.process=r1", "--label", "qits.ci.runner.version=2", "-v",
+            "/srv/runner-conf:/etc/runner:ro,Z", "-v",
+            "qits-ci-runner-state-r1:/var/lib/qits-ci-runner", "--mount",
+            "type=volume,source=cache,target=/cache,readonly", "-e", "TZ=Europe/Berlin", "r/i:2"),
+        LifecycleArgv.runSuccessor(CI, "docker", "r1", "2", "r/i:2", carried));
+  }
+
+  /** The toolkit's own belts still run first, so a refusal still names the toolkit's words. */
+  @Test
+  void theToolkitsBeltsRefuseBeforeTheLibrarySeesAValue() {
+    IllegalArgumentException label =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                LifecycleArgv.runSuccessor(
+                    CI, "docker", "r1", "2", "r/i:2", self(Map.of("bad key", "v"))));
+    assertEquals("invalid label key: 'bad key'", label.getMessage());
+    IllegalArgumentException image =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> LifecycleArgv.runDecommissioner(CI, "docker", "r1", "-x", null, List.of()));
+    assertEquals("invalid image: '-x'", image.getMessage());
+    IllegalArgumentException state =
+        assertThrows(IllegalArgumentException.class, () -> LifecycleArgv.state("docker", "-f"));
+    assertEquals("invalid container id: '-f'", state.getMessage());
+  }
+
   @Test
   void aVersionOutsideItsCharsetNamesNoContainer() {
     assertThrows(

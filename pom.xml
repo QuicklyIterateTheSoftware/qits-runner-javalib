@@ -55,10 +55,10 @@
              scope only, since an embedder supplies its own host's. Released calvers, moved only by
              the maintenance dependencies bump — never by hand. -->
         <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
-        <qits.idp-golden-masters.version>2026.1109.13349</qits.idp-golden-masters.version>
-        <qits.observability-golden-masters.version>2026.1120.180009</qits.observability-golden-masters.version>
+        <qits.idp-golden-masters.version>2026.1122.143700</qits.idp-golden-masters.version>
+        <qits.observability-golden-masters.version>2026.1122.141039</qits.observability-golden-masters.version>
         <qits.workspaces-golden-masters.version>2026.1117.154126</qits.workspaces-golden-masters.version>
-        <qits.projects-golden-masters.version>2026.1116.190952</qits.projects-golden-masters.version>
+        <qits.projects-golden-masters.version>2026.1122.200309</qits.projects-golden-masters.version>
 
         <!-- Passed by the maven-library release recipe (-Dqits.maven.repository.url=...); a plain
              developer build resolves off this public default. -->

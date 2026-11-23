@@ -41,7 +41,13 @@ import org.jboss.logging.Logger;
  * <p><b>The toolkit handles the lifecycle frames; the domain handles its own.</b> {@code Ack},
  * {@code Backlog}, {@code Nothing}, {@code Upgrade}, {@code Retire}, {@code Quarantined} and {@code
  * Reinstated} never reach {@link RunnerDomain#onMessage}; every domain frame does, on a cached
- * worker pool, because a domain's answers are docker calls that block.
+ * worker pool, because a domain's answers are docker calls that block. A domain frame waits for
+ * the connection's newest {@code Ack} to be handled — {@link RunnerDomain#onDropped} and {@link
+ * RunnerDomain#onAck} returned — before it reaches the pool (qits-2513): the host sends its first
+ * domain frame right behind the {@code Ack}, and an answer racing the domain's own Ack handling
+ * would read state the Ack is still settling. Only that one edge is ordered; frames stay
+ * concurrent, and unordered, among themselves, because serializing them would put every answer
+ * behind the slowest docker call in front of it.
  *
  * <p><b>A deleted runner decommissions itself</b>: told so by a {@code Retire} of kind {@code
  * DELETED} while connected, or by a 1008 {@code RUNNER_DELETED} close — the platform's two explicit
@@ -113,6 +119,15 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
    * slots wait behind — see {@link #onAck}. Complete when there was nothing to remove.
    */
   private volatile CompletableFuture<Void> carriedDropped = CompletableFuture.completedFuture(null);
+
+  /**
+   * What a domain frame arriving now waits behind (qits-2513): the newest {@code Ack}'s handling,
+   * or — before a connection's first Ack — that Ack, still to come. Installed fresh by every {@link
+   * #onConnected}, replaced by an {@code Ack} that finds it already released, and released at
+   * {@link #run}'s exit, so no frame is ever parked behind a gate nothing will open. Written on the
+   * event loop only.
+   */
+  private volatile AckGate ackHandled = new AckGate();
 
   /** The slot cap of the newest {@code Ack}. */
   private volatile int ackedSlots;
@@ -271,6 +286,9 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
         s.stop();
       }
       quiesce();
+      // After the pool has stopped: a frame still parked behind an Ack is released into a pool
+      // that rejects it, so it is dropped rather than handled by a runner on its way out.
+      ackHandled.release();
       telemetry.stop(TELEMETRY_LAST_WORDS_MILLIS);
       http.close();
     }
@@ -341,6 +359,12 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
 
   @Override
   public void onConnected() {
+    // A new session's frames wait for its own first Ack. A gate a lost session left unclaimed —
+    // its Ack never came — is released here, so the frames parked on it are not stranded; one an
+    // Ack claimed opens when that Ack's handling is done, as it would have.
+    AckGate previous = ackHandled;
+    ackHandled = new AckGate();
+    previous.abandon();
     // The domain's session start is docker work, so it runs off the loop and the Hello waits for
     // it: the host must never hand work into a session whose leftovers are still being reconciled
     // under the same labels. The Hello claims what was carried.
@@ -369,7 +393,7 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
       onLifecycle(lifecycleMessage);
     } else if (domainType.isInstance(message)) {
       D frame = domainType.cast(message);
-      work(
+      Runnable job =
           () -> {
             try {
               domain.onMessage(frame, session);
@@ -378,7 +402,12 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
                   "%s could not handle a %s: %s",
                   who, message.getClass().getSimpleName(), e.getMessage());
             }
-          });
+          };
+      // The gate as it stands when the frame arrives, read here on the loop: an Ack that comes
+      // after this frame does not hold it back. Released already — the common case — this submits
+      // inline, as it always did; otherwise the thread that releases the gate submits it. Either
+      // way it is only a submit, and a pool already shut down drops the frame in work().
+      ackHandled.whenReleased(() -> work(job));
     } else {
       LOG.debugf("%s ignored a %s from the host", who, message.getClass().getSimpleName());
     }
@@ -432,8 +461,22 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
           "%s speaks capability version %d, the host answered %d — exiting rather than guessing.",
           who, identity.capabilityVersion(), ack.capabilityVersion());
       exit.complete(RunnerExit.CAPABILITY_MISMATCH);
+      // The gate is left shut on purpose: a frame from a host this runner cannot speak to is not
+      // handed to the domain. The exit is already decided, and run()'s exit releases the gate into
+      // a stopped pool, which drops what was parked on it.
       return;
     }
+    // Frames from here on wait for this Ack's handling. A gate still shut is joined — it is the
+    // connection's, waiting for exactly this Ack, or an earlier Ack's still being handled, which
+    // then opens only once both are done; one already open is replaced, so a frame behind a
+    // re-sent Ack waits for that Ack too.
+    AckGate gate = ackHandled;
+    if (!gate.claim()) {
+      gate = new AckGate();
+      gate.claim();
+      ackHandled = gate;
+    }
+    AckGate claimed = gate;
     LOG.infof("%s connected slots=%d", who, ack.slots());
     // Before the slots are counted: a carried item the host did not adopt holds no slot any more.
     // And drop-then-reserve: the domain has removed it before this session can reserve anything. A
@@ -443,17 +486,25 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     // zero until the domain is done, so no Backlog in between reserves either.
     List<String> dropped = ledger.settleCarried(ack.adopted());
     if (!dropped.isEmpty()) {
-      carriedDropped =
-          CompletableFuture.runAsync(
-              () -> {
-                LOG.infof("%s's host did not keep carried %s; dropping them", who, dropped);
-                try {
-                  domain.onDropped(dropped, session);
-                } catch (RuntimeException e) {
-                  LOG.warnf("%s could not drop %s: %s", who, dropped, e.getMessage());
-                }
-              },
-              workers);
+      try {
+        carriedDropped =
+            CompletableFuture.runAsync(
+                () -> {
+                  LOG.infof("%s's host did not keep carried %s; dropping them", who, dropped);
+                  try {
+                    domain.onDropped(dropped, session);
+                  } catch (RuntimeException e) {
+                    LOG.warnf("%s could not drop %s: %s", who, dropped, e.getMessage());
+                  }
+                },
+                workers);
+      } catch (RejectedExecutionException e) {
+        // An Ack that lands after run()'s exit stopped the pool: nothing of it will run, so
+        // nothing may stay parked behind it either.
+        LOG.debugf("%s dropped an Ack after stopping", who);
+        claimed.handled();
+        return;
+      }
     }
     // The newest Ack's number, whichever callback applies it: a re-sent Ack during the drop waits
     // for it too.
@@ -466,17 +517,26 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     carriedDropped.whenComplete(
         (done, failure) -> {
           reserveIf(ledger.onAck(ackedSlots));
-          work(
-              () -> {
-                try {
-                  domain.onAck(ack, session);
-                } catch (RuntimeException e) {
-                  LOG.warnf("%s's domain could not handle the Ack: %s", who, e.getMessage());
-                }
-                if (first && !ending.get()) {
-                  lifecycle.firstAck();
-                }
-              });
+          boolean accepted =
+              work(
+                  () -> {
+                    try {
+                      domain.onAck(ack, session);
+                    } catch (RuntimeException e) {
+                      LOG.warnf("%s's domain could not handle the Ack: %s", who, e.getMessage());
+                    } finally {
+                      // Behind onDropped (this job waits on it) and onAck, returned or thrown:
+                      // the frames parked on the gate go to the pool now, before the node's
+                      // once-per-process work, which they never waited for.
+                      claimed.handled();
+                    }
+                    if (first && !ending.get()) {
+                      lifecycle.firstAck();
+                    }
+                  });
+          if (!accepted) {
+            claimed.handled();
+          }
         });
   }
 
@@ -618,12 +678,17 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
    * Submit to {@link #workers}, dropping the job rather than throwing when the pool is already
    * shut down: a socket close or a late frame can land on the event loop after {@link #run}'s
    * {@code finally} has stopped it, and a stopping runner has nothing left to do with it.
+   *
+   * @return whether the job was accepted; a caller with something waiting on the job's end (an
+   *     {@link AckGate}) must settle it itself when it was not, because the job never runs
    */
-  private void work(Runnable job) {
+  private boolean work(Runnable job) {
     try {
       workers.execute(job);
+      return true;
     } catch (RejectedExecutionException e) {
       LOG.debugf("%s dropped work after stopping", who);
+      return false;
     }
   }
 
@@ -654,9 +719,87 @@ public final class RunnerRuntime<D extends RunnerMessage> implements ControlSock
     return ledger;
   }
 
+  /** For the suite: whether {@link #run}'s exit has shut the worker pool, so it rejects work. */
+  boolean workersStopped() {
+    return workers.isShutdown();
+  }
+
   /** For the suite: whether the host's last word on quarantine was {@link Quarantined}. */
   boolean quarantined() {
     return quarantined;
+  }
+
+  /**
+   * What domain frames wait behind until the {@code Ack}s that claimed it are handled (qits-2513).
+   * A gate, not a queue: it orders each frame after the Ack, and nothing between the frames, which
+   * stay as concurrent as the pool makes them.
+   *
+   * <p>Counted rather than completed by its Ack: an Ack re-sent while the one before it is still
+   * being handled joins the same gate, which then opens only when both are done — completing it at
+   * the first would let a frame behind the second through before that one's {@code onAck}
+   * returned. Once open it stays open, and a later Ack takes a fresh one; deciding "open" under the
+   * lock is what keeps an Ack from joining a gate in the instant it is opening.
+   */
+  private static final class AckGate {
+
+    private final CompletableFuture<Void> released = new CompletableFuture<>();
+
+    /** The claiming Acks not yet handled. */
+    private int handling;
+
+    /** Set, under the lock, once the gate opens; a claim after that takes a fresh gate. */
+    private boolean open;
+
+    /** Join this gate for one Ack; false when it is already open, and the Ack needs its own. */
+    synchronized boolean claim() {
+      if (open) {
+        return false;
+      }
+      handling++;
+      return true;
+    }
+
+    /** One claiming Ack is handled (or will never be): the last one opens the gate. */
+    void handled() {
+      synchronized (this) {
+        if (--handling > 0) {
+          return;
+        }
+        open = true;
+      }
+      released.complete(null);
+    }
+
+    /**
+     * A session ended before its Ack came: open the gate if no Ack claimed it, so nothing parked
+     * on it waits for an Ack on a socket that is gone. A claimed gate opens with its handling.
+     */
+    void abandon() {
+      synchronized (this) {
+        if (handling > 0) {
+          return;
+        }
+        open = true;
+      }
+      released.complete(null);
+    }
+
+    /** Open it whatever is claimed: the runtime has stopped. */
+    void release() {
+      synchronized (this) {
+        open = true;
+      }
+      released.complete(null);
+    }
+
+    /**
+     * Run {@code job} once the gate is open: inline when it already is, otherwise on the thread
+     * that opens it. Never with an executor of its own — {@code job} is a submit to the pool, and
+     * the pool's rejection once stopped is what drops a frame released too late.
+     */
+    void whenReleased(Runnable job) {
+      released.whenComplete((done, failure) -> job.run());
+    }
   }
 
   /** The runtime's side of {@link RunnerSession}. */

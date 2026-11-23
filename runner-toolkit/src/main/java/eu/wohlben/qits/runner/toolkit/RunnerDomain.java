@@ -17,8 +17,9 @@ import java.util.Map;
  * <p>The order the runtime calls these in, per session: {@link #onSessionStart}, then {@link
  * #capabilities} and {@link #helloExtensions} go out in the {@code Hello}; at the {@code Ack},
  * {@link #onDropped} (for the carried items the host did not adopt), then {@link #onAck}; every
- * domain frame to {@link #onMessage}; and {@link #onSessionLost} when the socket drops. {@link
- * #onDecommission} once, when the runner learns it was deleted.
+ * domain frame to {@link #onMessage}, each only once the newest {@code Ack}'s {@link #onDropped}
+ * and {@link #onAck} have returned (qits-2513); and {@link #onSessionLost} when the socket drops.
+ * {@link #onDecommission} once, when the runner learns it was deleted.
  *
  * @param <D> the runner's own sealed message set
  */
@@ -46,7 +47,13 @@ public interface RunnerDomain<D extends RunnerMessage> {
    */
   void onSessionStart(RunnerSession session, List<String> carried);
 
-  /** The host's {@code Ack}, after the toolkit's own handling of it. Off the event loop. */
+  /**
+   * The host's {@code Ack}, after the toolkit's own handling of it and after {@link #onDropped}.
+   * Off the event loop. No domain frame of the connection that arrived after this {@code Ack}
+   * reaches {@link #onMessage} until this has returned or thrown (qits-2513), so the state it
+   * settles is settled before the host's first frame of the session is answered. A re-sent {@code
+   * Ack} holds the frames behind it the same way.
+   */
   void onAck(Ack ack, RunnerSession session);
 
   /**
@@ -55,7 +62,14 @@ public interface RunnerDomain<D extends RunnerMessage> {
    */
   default void onDropped(List<String> workIds, RunnerSession session) {}
 
-  /** Every domain frame, on a worker thread of a cached pool. */
+  /**
+   * Every domain frame, on a worker thread of a cached pool. A connection's domain frames are
+   * delivered only after the newest {@code Ack}'s {@link #onDropped} and {@link #onAck} have
+   * returned (qits-2513): a frame the host sends right behind its {@code Ack} waits for them. Among
+   * themselves frames stay concurrent and unordered — two can run at once, and the second sent can
+   * run first — because an answer is a blocking docker call and serializing them would queue every
+   * answer behind the slowest.
+   */
   void onMessage(D message, RunnerSession session);
 
   /**

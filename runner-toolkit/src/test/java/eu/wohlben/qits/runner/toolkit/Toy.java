@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * The suite's runner: a test-only identity and a two-frame domain — host → runner {@code take}
@@ -109,6 +110,14 @@ final class Toy {
     /** The domain's own housekeeping passes; read once, when the runtime is built. */
     final List<HousekeepingPass> passes = new ArrayList<>();
 
+    /**
+     * What {@link #onAck} and {@link #onDropped} wait on before they record themselves: open by
+     * default, a latch a suite holds to keep the Ack's handling in progress (qits-2513).
+     */
+    volatile CountDownLatch holdAck = new CountDownLatch(0);
+
+    volatile CountDownLatch holdDropped = new CountDownLatch(0);
+
     /** What {@link #onDecommission} does besides recording itself — a suite's own docker work. */
     volatile java.util.function.Consumer<RunnerSession> decommissioning = session -> {};
 
@@ -134,17 +143,20 @@ final class Toy {
 
     @Override
     public void onAck(Ack ack, RunnerSession session) {
+      await(holdAck);
       events.add("ack" + ack.slots());
     }
 
     @Override
     public void onDropped(List<String> workIds, RunnerSession session) {
+      await(holdDropped);
       events.add("dropped" + workIds);
       dropped.add(workIds);
     }
 
     @Override
     public void onMessage(Message message, RunnerSession session) {
+      events.add("message:" + message.getClass().getSimpleName());
       messages.add(message);
       switch (message) {
         case Take t -> session.taken(t.itemId());
@@ -176,6 +188,15 @@ final class Toy {
     @Override
     public void onSessionLost() {
       events.add("sessionLost");
+    }
+
+    /** Wait for a suite's latch; an interrupt — the runtime stopping — lets the hook go on. */
+    static void await(CountDownLatch latch) {
+      try {
+        latch.await();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 }

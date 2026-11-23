@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
@@ -510,6 +511,148 @@ class RunnerRuntimeTest {
         java.util.Set.of(new Toy.Take("item-a"), new Toy.Release("item-a")),
         java.util.Set.copyOf(domain.messages),
         "only the domain's own frames, in the domain's own types");
+  }
+
+  /**
+   * The race qits-2513 closes: the host sends its first domain frame right behind the {@code Ack}
+   * (system-runner's {@code Estate}), and the frame used to reach the pool beside the Ack's own
+   * handling, so the domain could answer it before its {@code onAck} had run.
+   */
+  @Test
+  void theFirstDomainFrameWaitsForTheConnectionsAck() throws Exception {
+    domain.holdAck = new CountDownLatch(1);
+    ackThenFrames(new Toy.Take("item-a"));
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    Thread.sleep(500);
+    assertEquals(List.of(), domain.messages, "no domain frame before onAck returned");
+    domain.holdAck.countDown();
+    awaitTrue(() -> domain.messages.size() == 1);
+    assertEquals(
+        List.of("sessionStart[]", "ack1", "message:Take"), domain.events, "Ack, then the frame");
+  }
+
+  /**
+   * The gate covers the drop too: on a redial the domain's {@code onDropped} runs before its {@code
+   * onAck}, and a frame behind that Ack waits for both.
+   */
+  @Test
+  void aFrameBehindTheAckWaitsForTheCarriedItemsToBeDropped() throws Exception {
+    ackWith(2, 0);
+    start("t", 10_000);
+    host.await(Hello.class, 1);
+    host.send(new Backlog(1));
+    host.await(Reserve.class);
+    host.send(new Toy.Take("item-a"));
+    awaitHeld(1);
+    domain.holdDropped = new CountDownLatch(1);
+    // The second session's Ack adopts nothing, so item-a is dropped, and a frame follows at once.
+    ackThenFrames(new Toy.Take("item-b"));
+    host.socket.close();
+
+    host.await(Hello.class, 2);
+    Thread.sleep(500);
+    assertEquals(
+        List.of(new Toy.Take("item-a")), domain.messages, "no frame while onDropped runs");
+    domain.holdDropped.countDown();
+    awaitTrue(() -> domain.messages.size() == 2);
+    List<String> events = List.copyOf(domain.events);
+    assertTrue(
+        events.indexOf("dropped[item-a]") < events.lastIndexOf("ack1")
+            && events.lastIndexOf("ack1") < events.lastIndexOf("message:Take"),
+        "dropped, then the Ack, then the frame: " + events);
+  }
+
+  /**
+   * A gate, not a queue: the frames held behind one Ack are released together and still run side
+   * by side, so one blocked answer holds up none of the others.
+   */
+  @Test
+  void framesReleasedByTheAckStillRunConcurrently() throws Exception {
+    CountDownLatch slowEntered = new CountDownLatch(1);
+    CountDownLatch slowHeld = new CountDownLatch(1);
+    domain =
+        new Toy.Domain() {
+          @Override
+          public void onMessage(Toy.Message message, RunnerSession session) {
+            if (message.equals(new Toy.Take("slow"))) {
+              slowEntered.countDown();
+              await(slowHeld);
+            }
+            super.onMessage(message, session);
+          }
+        };
+    domain.holdAck = new CountDownLatch(1);
+    ackThenFrames(new Toy.Take("slow"), new Toy.Take("fast"));
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    Thread.sleep(300);
+    assertEquals(List.of(), domain.messages, "both wait for the Ack");
+    domain.holdAck.countDown();
+    assertTrue(slowEntered.await(10, TimeUnit.SECONDS), "the slow frame was delivered");
+    awaitTrue(() -> domain.messages.contains(new Toy.Take("fast")));
+    assertEquals(1, slowHeld.getCount(), "the fast frame ran while the slow one was blocked");
+    slowHeld.countDown();
+    awaitTrue(() -> domain.messages.size() == 2);
+  }
+
+  @Test
+  void anOnAckThatThrowsStillReleasesTheFramesBehindIt() throws Exception {
+    domain =
+        new Toy.Domain() {
+          @Override
+          public void onAck(Ack ack, RunnerSession session) {
+            super.onAck(ack, session);
+            throw new IllegalStateException("the domain's Ack handling failed");
+          }
+        };
+    domain.holdAck = new CountDownLatch(1);
+    ackThenFrames(new Toy.Take("item-a"));
+    start("t", 10_000);
+    host.await(Hello.class);
+
+    Thread.sleep(300);
+    assertEquals(List.of(), domain.messages);
+    domain.holdAck.countDown();
+    awaitTrue(() -> domain.messages.size() == 1);
+    assertEquals(List.of("sessionStart[]", "ack1", "message:Take"), domain.events);
+  }
+
+  /**
+   * A frame still parked behind an Ack when the runner stops is released into a pool that has
+   * stopped, and dropped there: the domain never sees it, and the runner exits cleanly.
+   */
+  @Test
+  void aFrameHeldBehindAnAckWhenTheRunnerStopsIsDroppedQuietly() throws Exception {
+    domain.holdAck = new CountDownLatch(1);
+    ackThenFrames(new Toy.Take("item-a"));
+    start("t", 10_000);
+    host.await(Hello.class);
+    Thread.sleep(300);
+
+    runner.stop(RunnerExit.OK);
+    awaitTrue(runner::workersStopped);
+    domain.holdAck.countDown();
+    assertEquals(RunnerExit.OK, exit.get(10, TimeUnit.SECONDS));
+    runner = null;
+    assertTrue(domain.events.contains("ack1"), domain.events::toString);
+    Thread.sleep(200);
+    assertEquals(List.of(), domain.messages, "the parked frame was dropped, not delivered");
+  }
+
+  /** A host that answers every Hello with an Ack and, right behind it, these domain frames. */
+  private void ackThenFrames(Toy.Message... frames) {
+    host.script =
+        (h, message) -> {
+          if (message instanceof Hello) {
+            h.send(new Ack(Toy.IDENTITY.capabilityVersion(), 1));
+            for (Toy.Message frame : frames) {
+              h.send(frame);
+            }
+          }
+        };
   }
 
   @Test

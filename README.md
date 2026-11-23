@@ -280,9 +280,10 @@ the right start for a new runner's suite.
 Per session: `onSessionStart(session, carried)` (off the event loop, before the `Hello`);
 `capabilities(host)` and `helloExtensions()` go out in the `Hello`; at the `Ack`, the toolkit
 settles the carried items, `onDropped(notAdopted)`, then counts the slots and calls `onAck`; every
-domain frame to `onMessage`, on a cached worker pool; `onSessionLost()` when the socket drops (held
-items become carried). On an `Upgrade`: drain, pull, digest check, poll `quiescent()`, start the
-successor, and leave on its `Retire{SUPERSEDED}`. On `Retire{DELETED}` or a 1008 `RUNNER_DELETED`
+domain frame to `onMessage`, on a cached worker pool — each only after the newest `Ack`'s
+`onDropped` and `onAck` have returned (qits-2513), and unordered among themselves;
+`onSessionLost()` when the socket drops (held items become carried). On an `Upgrade`: drain, pull,
+digest check, poll `quiescent()`, start the successor, and leave on its `Retire{SUPERSEDED}`. On `Retire{DELETED}` or a 1008 `RUNNER_DELETED`
 close — the platform's two explicit words — `onDecommission(session)` once, then `client.json` is
 deleted, the restart policy taken away, the helper started, exit 0. A believed `invalid_client`
 streak is **not** one of them (qits-1592): a revoked credential is not a deletion, so the runner
